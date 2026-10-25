@@ -1,12 +1,12 @@
 # Go
-/dist/
+#/dist/
 *.test
 *.out
 
 # runtime data / local configs
-/data/
+#/data/
 /config.yaml
-/config.dev.yaml
+#/config.dev.yaml
 *.db
 *.db-wal
 *.db-shm

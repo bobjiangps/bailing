@@ -1,0 +1,10 @@
+chmod 755 /bailing/bailing-linux-amd64
+/bailing/bailing-linux-amd64 user add me --admin --display "我" -config /bailing/config.yaml
+
+nginx -t && systemctl reload nginx
+systemctl start bailing && systemctl status bailing
+curl -s  http://127.0.0.1:8085/bailing/api/health 
+curl -sk https://www.xxx.com/bailing/api/health 
+
+cd /Users/bobjames/workspace/code/myself/bailing
+./dist/bailing-darwin-amd64 serve -config ./dist/config.dev.yaml

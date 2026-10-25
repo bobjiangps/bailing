@@ -1,0 +1,60 @@
+# 百灵 bailing — local development config (macOS / Windows).
+# Copy to config.dev.yaml (git-ignored), then:  make dev-api   (or see docs/dev-guide.md)
+# Relative paths are resolved against the directory of this file.
+
+server:
+  listen: "127.0.0.1:8080"
+  base_url: "http://localhost:5173"       # the Vite dev server in front of the API
+  base_path: ""
+  trusted_proxies: ["127.0.0.1", "::1"]
+  allowed_origins: ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+paths:
+#  photos: "./data/photos"                 # put a few album folders here
+  photos: ["./data/photos", "/Users/bobjames/Downloads/headpic"]                 # put a few album folders here
+#  music:  "./data/music"
+  music:  ["./data/music", "/Users/bobjames/workspace/music/netdisk"]                 # put a few music folders here
+  data:   "./data/runtime"                # bailing.db + cache (delete to start fresh)
+
+auth:
+  mode: "password"                        # "none" = no login (only allowed on 127.0.0.1)
+  session_days: 30
+  login_rate: { max_failures: 5, window: "10m", lock: "15m" }
+
+scan:
+  on_start: true
+  interval: "0"                           # no periodic rescans while developing
+  photo_exts: [jpg, jpeg, png, webp, heic, heif, gif]
+  music_exts: [mp3, m4a, aac, flac, ogg, opus, wav]
+
+imaging:
+  vips_bin_dir: ""                        # Windows: e.g. "C:/tools/vips/bin"
+  workers: 2
+  nice: 0
+  sizes: { s: 480, m: 2048 }
+  quality: 80
+
+lyrics:
+  online: true
+  lrclib_base: "https://lrclib.net"
+  negative_ttl: "1h"
+  timeout: "8s"
+  save_beside_music: true
+
+traffic:
+  monthly_quota_gb: 1                     # small quota so you can see the warning banner
+  warn_percent: 80
+  reset_day: 1
+  block_proxy_over_quota: true
+
+sources:
+  proxy:  { enabled: true, max_concurrent: 4, link_ttl: "24h", allow_private: false }
+  radio:  { enabled: true, api_base: "https://de1.api.radio-browser.info" }
+  lx:     { enabled: true, scripts_dir: "", platforms: [kw, kg, tx, wy, mg], request_timeout: "15s", cache_ttl: "10m" }
+
+features:                           # which halves run on this server (at least one)
+  photos: true                      # albums
+  music: true                       # music, radio, online sources, favourites, playlists
+
+log_level: "debug"
+
