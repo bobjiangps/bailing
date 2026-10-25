@@ -1,0 +1,73 @@
+# 百灵 bailing — example configuration.
+# Copy to config.yaml (production) or config.dev.yaml (development) and edit.
+# Relative paths are resolved against the directory of this file.
+
+server:
+  listen: "127.0.0.1:8080"          # nginx proxies to this; never expose it directly
+  base_url: "https://music.example.com"   # used for cookie Secure flag + Origin check
+  base_path: ""                     # "" when served at a (sub)domain root; "/bailing" for example.com/bailing/
+                                    #   (front end must then be built with BASE_PATH=/bailing)
+  trusted_proxies: ["127.0.0.1", "::1"]   # only these may set X-Real-IP / X-Forwarded-For
+  allowed_origins: []               # dev: ["http://localhost:5173"]
+
+paths:
+  # photos / music: one path, or a list of paths loaded as one library, e.g.
+  #   music: ["/srv/bailing/music", "/mnt/usb/music"]
+  # The first path keeps plain ids; later ones are tagged with a short hash
+  # of the path, so add new folders at the END of the list.
+  photos: "/srv/bailing/photos"     # each sub folder = one album
+  music:  "/srv/bailing/music"      # scanned recursively
+  data:   "/var/lib/bailing"        # bailing.db, cache/, lx-scripts/
+
+auth:
+  mode: "password"                  # password | none (none only when listening on 127.0.0.1)
+  session_days: 30
+  login_rate: { max_failures: 5, window: "10m", lock: "15m" }
+
+scan:
+  on_start: true
+  interval: "6h"                    # "0" disables periodic rescans
+  photo_exts: [jpg, jpeg, png, webp, heic, heif, gif]
+  music_exts: [mp3, m4a, aac, flac, ogg, opus, wav]
+
+imaging:
+  vips_bin_dir: ""                  # empty = search PATH; Windows e.g. "C:/tools/vips/bin"
+  workers: 1                        # keep 1 on a 1-core server
+  nice: 10                          # lower CPU priority of vips (Linux/macOS)
+  sizes: { s: 480, m: 2048 }        # long edge in px
+  quality: 80
+
+lyrics:
+  online: true                      # download from LRCLIB when no local lyrics exist
+  lrclib_base: "https://lrclib.net"
+  negative_ttl: "168h"              # remember "not found" for 7 days
+  timeout: "8s"
+  save_beside_music: true           # also write <song>.lrc next to the audio (music dir must be writable; otherwise only cached in the DB)
+
+traffic:
+  monthly_quota_gb: 0               # 0 = no quota; e.g. 50 shows a banner at warn_percent
+  warn_percent: 80
+  reset_day: 1                      # billing month starts on this day (1-28)
+  block_proxy_over_quota: true      # P2: stop server relaying when over quota
+
+sources:
+  proxy:                            # server relay (costs server traffic, shown in the UI)
+    enabled: true
+    max_concurrent: 4               # relayed audio streams at the same time
+    link_ttl: "24h"                 # signed relay links expire after this
+    allow_private: false            # keep false: blocks LAN / metadata addresses (SSRF)
+  radio:
+    enabled: true
+    api_base: "https://de1.api.radio-browser.info"
+  lx:                               # LX Music custom-source scripts
+    enabled: true
+    scripts_dir: ""                 # default <paths.data>/lx-scripts
+    platforms: [kw, kg, tx, wy, mg]     # search adapters; remove ones you do not want
+    request_timeout: "15s"
+    cache_ttl: "10m"                # resolved song URLs are reused this long
+
+features:                           # which halves run on this server (at least one)
+  photos: true                      # albums
+  music: true                       # music, radio, online sources, favourites, playlists
+
+log_level: "info"                   # debug | info | warn | error

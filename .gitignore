@@ -1,0 +1,29 @@
+# Go
+/dist/
+*.test
+*.out
+
+# runtime data / local configs
+/data/
+/config.yaml
+/config.dev.yaml
+*.db
+*.db-wal
+*.db-shm
+
+# front end
+/web/node_modules/
+/web/.svelte-kit/
+# generated per edition by web/scripts/gen-manifest.mjs
+/web/static/manifest.webmanifest
+/web/static/icons/apple-touch-icon.png
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/settings.json

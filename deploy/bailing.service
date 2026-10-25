@@ -1,0 +1,43 @@
+# /etc/systemd/system/bailing.service
+# Install:  sudo cp bailing.service /etc/systemd/system/
+#           sudo systemctl daemon-reload && sudo systemctl enable --now bailing
+# Logs:     journalctl -u bailing -f
+
+[Unit]
+Description=Bailing (photo albums & music)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bailing
+Group=bailing
+ExecStart=/opt/bailing/bailing serve -config /etc/bailing/config.yaml
+Restart=on-failure
+RestartSec=3
+
+# 1 core / 1 GB box: keep bailing (and the vips processes it spawns) bounded.
+MemoryMax=400M
+CPUQuota=90%
+
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/bailing
+# Photos are read-only for bailing. The music directory is writable so that
+# downloaded lyrics can be saved as <song>.lrc beside the audio
+# (lyrics.save_beside_music). Set it to false and drop the music path below
+# to make music read-only again.
+# Extra photo/music folders listed in config.yml outside /srv/bailing must be
+# added here too (ReadOnlyPaths= / ReadWritePaths=), or systemd hides them.
+ReadOnlyPaths=/srv/bailing /etc/bailing
+ReadWritePaths=/srv/bailing/music
+
+[Install]
+WantedBy=multi-user.target
+

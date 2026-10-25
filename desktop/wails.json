@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "bailing",
+  "outputfilename": "bailing",
+  "frontend:dir": "frontend",
+  "frontend:install": "",
+  "frontend:build": "",
+  "wailsjsdir": "",
+  "author": {
+    "name": "bailing"
+  },
+  "info": {
+    "productName": "百灵",
+    "comments": "Family photo albums & music"
+  }
+}
+
