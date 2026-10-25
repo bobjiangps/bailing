@@ -6,6 +6,7 @@
 
 # runtime data / local configs
 #/data/
+/data/runtime/cache/
 /config.yaml
 #/config.dev.yaml
 #*.db
