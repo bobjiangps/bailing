@@ -362,6 +362,34 @@
 		.meta {
 			display: none;
 		}
+		/* phone: [all | favourites] [region ▾] on one line, search below */
+		.bar {
+			padding: 0 2px 8px;
+		}
+		.search {
+			order: 3;
+			flex: 1 1 100%;
+			min-width: 0;
+		}
+		select {
+			flex: 1 1 0;
+			min-width: 0;
+			max-width: none;
+		}
+		.tags {
+			padding: 0 2px 10px;
+		}
+		.row {
+			gap: 10px;
+			padding: 7px 4px;
+		}
+	}
+	.radio {
+		min-width: 0;
+		max-width: 100%;
+	}
+	.hint {
+		overflow-wrap: anywhere;
 	}
 	@keyframes blink {
 		50% {

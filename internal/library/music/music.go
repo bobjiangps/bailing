@@ -263,7 +263,7 @@ func (l *Library) indexFile(id, rel, folder, path, lrcRel string, info fs.FileIn
 
 	_, err = l.db.Exec(`INSERT INTO tracks(id, rel_path, folder, title, artist, album, album_artist,
 		track_no, disc_no, year, genre, duration_ms, format, size, mtime, cover_key, color, lrc_path,
-		has_embedded_lyrics, name_guessed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		has_embedded_lyrics, name_guessed, added_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET folder=excluded.folder, title=excluded.title, artist=excluded.artist,
 		album=excluded.album, album_artist=excluded.album_artist, track_no=excluded.track_no,
 		disc_no=excluded.disc_no, year=excluded.year, genre=excluded.genre, duration_ms=excluded.duration_ms,
@@ -272,7 +272,7 @@ func (l *Library) indexFile(id, rel, folder, path, lrcRel string, info fs.FileIn
 		name_guessed=excluded.name_guessed`,
 		id, rel, t.Folder, t.Title, t.Artist, t.Album, albumArtist, t.TrackNo, discNo, t.Year, genre,
 		t.Duration, ext, info.Size(), info.ModTime().Unix(), t.Cover, t.Color, lrcRel, store.Bool(hasLyrics),
-		store.Bool(guessed))
+		store.Bool(guessed), time.Now().Unix())
 	if err == nil {
 		// a changed file may have new tags: drop previously downloaded lyrics
 		l.db.Exec(`DELETE FROM lyrics_cache WHERE track_id=? AND status<>'found'`, id)
@@ -515,8 +515,43 @@ func findFolderImage(audio string) string {
 // "" selects tracks without that tag (the "unknown artist" group).
 type Query struct {
 	Q, Sort               string
+	Desc                  bool // reverse the sort
 	Folder, Artist, Album *string
 	Offset, Limit         int
+}
+
+// sortOrder builds the ORDER BY clause for Query.Sort:
+//
+//	""         folder, disc, track number (the order on disk)
+//	title      song name           artist / album: grouped, then track order
+//	added      recently added      mtime: file modification time
+//	duration   song length
+//
+// added / mtime are newest first; desc reverses only the first key, the
+// tie-breakers keep albums in track order.
+func sortOrder(sort string, desc bool) string {
+	dir := " ASC"
+	if desc {
+		dir = " DESC"
+	}
+	switch sort {
+	case "title":
+		return "title COLLATE NOCASE" + dir + ", artist COLLATE NOCASE"
+	case "artist":
+		return "artist COLLATE NOCASE" + dir + ", album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE"
+	case "album":
+		return "album COLLATE NOCASE" + dir + ", disc_no, track_no, title COLLATE NOCASE"
+	case "added", "recent":
+		return "added_at" + dir + ", rel_path"
+	case "mtime":
+		return "mtime" + dir + ", rel_path"
+	case "duration":
+		return "duration_ms" + dir + ", title COLLATE NOCASE"
+	}
+	if desc {
+		return "folder DESC, disc_no DESC, track_no DESC, rel_path DESC"
+	}
+	return "folder, disc_no, track_no, rel_path"
 }
 
 const trackCols = `id, title, artist, album, duration_ms, cover_key, color, format, folder, track_no, year`
@@ -549,17 +584,7 @@ func (l *Library) Tracks(q Query) ([]Track, int, error) {
 		where = append(where, "album = ?")
 		args = append(args, *q.Album)
 	}
-	order := "folder, disc_no, track_no, rel_path"
-	switch q.Sort {
-	case "title":
-		order = "title COLLATE NOCASE"
-	case "artist":
-		order = "artist COLLATE NOCASE, album, disc_no, track_no"
-	case "album":
-		order = "album COLLATE NOCASE, disc_no, track_no"
-	case "recent":
-		order = "mtime DESC"
-	}
+	order := sortOrder(q.Sort, q.Desc)
 	if q.Limit <= 0 || q.Limit > 5000 {
 		q.Limit = 500
 	}

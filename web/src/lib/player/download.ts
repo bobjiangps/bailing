@@ -19,16 +19,24 @@ function save(href: string) {
 	a.remove();
 }
 
-/** Starts the download; throws a short message when it cannot. */
-export async function download(q: QueueItem): Promise<void> {
+/** LX quality names, best last. */
+const QUALITY_ORDER = ['128k', '192k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'master'];
+
+/**
+ * Starts the download; throws a short message when it cannot. Returns the
+ * quality that is being saved when it is lower than the preferred one (the
+ * scripts / platform had nothing better), so the caller can say so.
+ */
+export async function download(q: QueueItem): Promise<{ lower?: string }> {
 	if (q.source === 'local') {
 		save(`${apiBase}/media/track/${encodeURIComponent(q.id)}?dl=1`);
-		return;
+		return {};
 	}
 	let r: ResolveResult;
+	const want = prefs.lxQuality;
 	try {
 		r = await api<ResolveResult>('/api/play/resolve', {
-			body: { source: q.source, track: toRef(q), quality: prefs.lxQuality }
+			body: { source: q.source, track: toRef(q), quality: want }
 		});
 	} catch (e) {
 		throw new Error(e instanceof ApiError ? e.message : String(e));
@@ -37,5 +45,7 @@ export async function download(q: QueueItem): Promise<void> {
 	if (!r.proxy_url) throw new Error('relay disabled (sources.proxy.enabled)');
 	const name = q.artist ? `${q.artist} - ${q.title}` : q.title;
 	save(`${apiBase}${r.proxy_url}&dl=1&name=${encodeURIComponent(name)}`);
+	const got = r.quality ? QUALITY_ORDER.indexOf(r.quality) : -1;
+	return got >= 0 && got < QUALITY_ORDER.indexOf(want) ? { lower: r.quality } : {};
 }
 

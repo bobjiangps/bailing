@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Settings: appearance, photo viewer options, server traffic (billed by
 	// volume, so it gets a proper panel), library maintenance and account.
-	import { api, type TrafficSummary } from '$lib/api/client';
+	import { api, ApiError, type TrafficSummary } from '$lib/api/client';
 	import Icon from '$lib/components/Icon.svelte';
 	import { t } from '$lib/i18n';
 	import LxScripts from '$lib/online/LxScripts.svelte';
@@ -86,6 +86,41 @@
 	}
 
 	const modes: Mode[] = ['light', 'dark', 'system'];
+
+	// ---- change my password ----
+	let pwOld = $state('');
+	let pwNew = $state('');
+	let pwNew2 = $state('');
+	let pwBusy = $state(false);
+	let pwMsg = $state('');
+	let pwOk = $state(false);
+
+	async function changePw(e: SubmitEvent) {
+		e.preventDefault();
+		pwOk = false;
+		if (pwNew.length < 6) return void (pwMsg = t('settings.pwShort'));
+		if (pwNew !== pwNew2) return void (pwMsg = t('settings.pwMismatch'));
+		pwBusy = true;
+		pwMsg = '';
+		try {
+			await api('/api/me/password', { body: { old: pwOld, new: pwNew } });
+			pwOk = true;
+			pwMsg = t('settings.pwDone');
+			pwOld = pwNew = pwNew2 = '';
+		} catch (err) {
+			const code = err instanceof ApiError ? err.code : '';
+			pwMsg =
+				code === 'bad_credentials'
+					? t('settings.pwWrong')
+					: code === 'locked'
+						? t('settings.pwLocked')
+						: err instanceof Error
+							? err.message
+							: String(err);
+		} finally {
+			pwBusy = false;
+		}
+	}
 	const maxDay = $derived(Math.max(1, ...(traffic?.days.map((d) => d.bytes) ?? [1])));
 	const quotaPct = $derived(
 		traffic && traffic.quota_bytes ? Math.min(100, (traffic.month / traffic.quota_bytes) * 100) : 0
@@ -350,11 +385,42 @@
 				<span class="k"><Icon name="user" size={16} /> {session.user.display_name || session.user.name}</span>
 				<button class="btn" onclick={() => session.logout()}><Icon name="logout" size={15} />{t('nav.logout')}</button>
 			</div>
+			<h3>{t('settings.pwChange')}</h3>
+			<form class="pw" onsubmit={changePw}>
+				<!-- hidden user name helps password managers update the right entry -->
+				<input type="text" name="username" autocomplete="username" value={session.user.name} hidden readonly />
+				<input type="password" bind:value={pwOld} autocomplete="current-password" placeholder={t('settings.pwOld')} aria-label={t('settings.pwOld')} required />
+				<input type="password" bind:value={pwNew} autocomplete="new-password" minlength="6" placeholder={t('settings.pwNew')} aria-label={t('settings.pwNew')} required />
+				<input type="password" bind:value={pwNew2} autocomplete="new-password" minlength="6" placeholder={t('settings.pwNew2')} aria-label={t('settings.pwNew2')} required />
+				<div class="row">
+					<button class="btn primary" type="submit" disabled={pwBusy || !pwOld || !pwNew || !pwNew2}>{t('settings.pwSave')}</button>
+					{#if pwMsg}<span class="small" class:muted={pwOk} class:warn-text={!pwOk} role="status">{pwMsg}</span>{/if}
+				</div>
+			</form>
+			<p class="muted small">{t('settings.pwCli')}</p>
 		</section>
 	{/if}
 </div>
 
 <style>
+	.pw {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		max-width: 360px;
+	}
+	.pw input {
+		padding: 7px 12px;
+		border-radius: 10px;
+		border: 1px solid var(--line);
+		background: var(--surface);
+		color: var(--text);
+		font: inherit;
+		font-size: 14px;
+	}
+	.pw .row {
+		justify-content: flex-start;
+	}
 	.dirs {
 		margin-top: 12px;
 	}

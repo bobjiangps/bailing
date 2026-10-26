@@ -120,7 +120,7 @@ func (s *Server) tracks(w http.ResponseWriter, r *http.Request) {
 	}
 	list, total, err := s.app.Music.Tracks(music.Query{Q: strings.TrimSpace(q.Get("q")),
 		Folder: opt("folder"), Artist: opt("artist"), Album: opt("album"),
-		Sort: q.Get("sort"), Offset: off, Limit: lim})
+		Sort: q.Get("sort"), Desc: q.Get("desc") == "1", Offset: off, Limit: lim})
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "error", "query failed")
 		return

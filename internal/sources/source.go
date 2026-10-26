@@ -51,6 +51,9 @@ type Playable struct {
 	Format    string            `json:"format"` // mp3 | flac | aac | hls ...
 	Headers   map[string]string `json:"-"`      // non-empty => must go through the proxy
 	ExpiresAt time.Time         `json:"expires_at"`
+	// Quality actually delivered (LX sources), e.g. "128k" when the script
+	// had nothing better than what was asked for.
+	Quality string `json:"quality,omitempty"`
 	// Mode: "server" (served by bailing, costs ECS traffic),
 	// "direct" (browser connects to the origin, no ECS traffic) or
 	// "proxy" (relayed through bailing, costs ECS traffic).

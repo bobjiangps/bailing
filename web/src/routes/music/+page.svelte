@@ -21,9 +21,21 @@
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { formatTime } from '$lib/util/format';
+	import { tick, untrack } from 'svelte';
 
 	type LibTab = 'all' | 'folders' | 'artists' | 'albums';
 	type Tab = LibTab | 'mine' | 'radio' | 'online';
+	type Sort = '' | 'title' | 'artist' | 'album' | 'added' | 'mtime' | 'duration';
+	// [key, label, newest/longest first by default]
+	const SORTS: [Sort, string, boolean][] = [
+		['', 'music.sortDefault', false],
+		['title', 'music.sortTitle', false],
+		['artist', 'music.sortArtist', false],
+		['album', 'music.sortAlbum', false],
+		['added', 'music.sortAdded', true],
+		['mtime', 'music.sortMtime', true],
+		['duration', 'music.sortDuration', false]
+	];
 	const TABS: Tab[] = ['all', 'folders', 'artists', 'albums', 'mine', 'radio', 'online'];
 	const WIDE_MIN = 1100;
 	const FILTER: Record<Exclude<LibTab, 'all'>, 'folder' | 'artist' | 'album'> = {
@@ -46,6 +58,80 @@
 	// wide screens: record left, lyrics right, library in a drawer that can be hidden
 	const wide = $derived(vw >= WIDE_MIN);
 	let libOpen = $state(readLibOpen());
+	let sort = $state<Sort>(readSort().sort);
+	let desc = $state(readSort().desc);
+	let listEl: HTMLOListElement | undefined = $state();
+	let libEl: HTMLElement | undefined = $state();
+
+	function readSort(): { sort: Sort; desc: boolean } {
+		try {
+			const v = JSON.parse(localStorage.getItem('bl.musicSort') || '{}');
+			const ok = SORTS.some(([k]) => k === v.sort);
+			return { sort: ok ? v.sort : '', desc: v.desc === true };
+		} catch {
+			return { sort: '', desc: false };
+		}
+	}
+
+	function setSort(s: Sort, d: boolean) {
+		sort = s;
+		desc = d;
+		try {
+			localStorage.setItem('bl.musicSort', JSON.stringify({ sort: s, desc: d }));
+		} catch {
+			/* ignore */
+		}
+	}
+
+	/*
+	 * Keep the playing song in sight: when it changes (next / previous /
+	 * shuffle) and when the list is shown again (drawer opens, list reloads),
+	 * scroll its row into view. Nothing moves when the row is already
+	 * visible, so tapping a row does not make the list jump.
+	 */
+	function locate(force = false, behavior: ScrollBehavior = 'smooth') {
+		const el = listEl?.querySelector<HTMLElement>('li.cur');
+		if (!el) return;
+		if (!force) {
+			const r = el.getBoundingClientRect();
+			const box = wide && libEl ? libEl.getBoundingClientRect() : { top: 0, bottom: innerHeight };
+			// the fixed player bar covers the bottom of the window
+			const bottom = wide ? box.bottom : box.bottom - 96;
+			if (r.top >= box.top && r.bottom <= bottom) return;
+		}
+		el.scrollIntoView({ block: 'center', behavior });
+	}
+
+	/** On narrow screens the list is part of the page: only follow the song
+	 * while the user is looking at the list, never pull the page away from
+	 * the turntable or the lyrics. */
+	function listInView(): boolean {
+		if (wide) return libOpen;
+		const r = listEl?.getBoundingClientRect();
+		return !!r && r.top < innerHeight * 0.6 && r.bottom > 0;
+	}
+
+	const curLocal = $derived(player.current?.source === 'local' ? player.current.id : null);
+
+	// the song changed
+	$effect(() => {
+		if (!curLocal) return;
+		const h = setTimeout(() => untrack(() => q === '' && listInView() && locate()), 80);
+		return () => clearTimeout(h);
+	});
+
+	// the list (re)appeared: drawer opened, tab / sort changed, list reloaded
+	$effect(() => {
+		void tracks;
+		const open = wide ? libOpen : true;
+		if (!open) return;
+		let alive = true;
+		tick().then(() => {
+			// wait for the drawer to start sliding in
+			setTimeout(() => alive && untrack(() => q === '' && !scanning && listInView() && locate(false, 'instant')), 60);
+		});
+		return () => (alive = false);
+	});
 
 	const vinylSize = $derived(vw < 640 ? Math.min(vw - 96, 300) : vw < 1024 ? 280 : 340);
 	const isLib = $derived(tab !== 'radio' && tab !== 'online' && tab !== 'mine');
@@ -138,6 +224,8 @@
 			} else {
 				const p = new URLSearchParams({ limit: '5000' });
 				if (q) p.set('q', q);
+				if (sort) p.set('sort', sort);
+				if (desc) p.set('desc', '1');
 				if (tab !== 'all' && group !== null) p.set(FILTER[tab as Exclude<LibTab, 'all'>], group);
 				const r = await api<{ tracks: Track[]; total: number; scanning: boolean }>(`/api/music/tracks?${p}`);
 				if (my === reqId) {
@@ -159,6 +247,8 @@
 		void tab;
 		void group;
 		void showGroups;
+		void sort;
+		void desc;
 		const handle = setTimeout(load, q ? 250 : 0);
 		return () => clearTimeout(handle);
 	});
@@ -253,7 +343,7 @@
 	{/if}
 
 	<!-- ===== library (a drawer on wide screens) ===== -->
-	<section class="library glass" class:drawer={wide} class:open={libOpen} inert={wide && !libOpen}>
+	<section class="library glass" class:drawer={wide} class:open={libOpen} inert={wide && !libOpen} bind:this={libEl}>
 		{#if wide}
 			<div class="drawer-bar">
 				<p class="muted small">{t('music.libHint')}</p>
@@ -325,13 +415,37 @@
 			<div class="list-head">
 				<span class="muted num">{t('music.tracks', { n: total })}</span>
 				<span class="head-acts">
+					{#if curLocal && tracks.some((x) => x.id === curLocal)}
+						<button class="icon-btn" title={t('music.locate')} aria-label={t('music.locate')} onclick={() => locate(true)}>
+							<Icon name="target" size={15} />
+						</button>
+					{/if}
 					<AddToPlaylist items={() => tracks.map((x) => toSaved(x))} size={15} label={t('pl.addAll')} />
 					<button class="btn primary" disabled={!tracks.length} onclick={() => playFrom(0)}>
 						<Icon name="play" size={14} />{t('music.playAll')}
 					</button>
 				</span>
 			</div>
-			<ol class="tracks">
+			<div class="sort-bar">
+				<label class="sort">
+					<span class="muted">{t('music.sort')}</span>
+					<select
+						value={sort}
+						onchange={(e) => {
+							const s = e.currentTarget.value as Sort;
+							setSort(s, SORTS.find(([k]) => k === s)?.[2] ?? false);
+						}}
+						aria-label={t('music.sort')}
+					>
+						{#each SORTS as [k, label] (k)}<option value={k}>{t(label)}</option>{/each}
+					</select>
+				</label>
+				<div class="seg" role="group" aria-label={t('music.sort')}>
+					<button class:on={!desc} aria-pressed={!desc} onclick={() => setSort(sort, false)}>{t('music.sortAsc')}</button>
+					<button class:on={desc} aria-pressed={desc} onclick={() => setSort(sort, true)}>{t('music.sortDesc')}</button>
+				</div>
+			</div>
+			<ol class="tracks" bind:this={listEl}>
 				{#each tracks as tr, i (tr.id)}
 					{@const isCur = player.current?.source === 'local' && player.current.id === tr.id}
 					<li class:cur={isCur}>
@@ -375,8 +489,14 @@
 	}
 	@media (max-width: 960px) {
 		.music {
-			grid-template-columns: 1fr;
+			/* minmax(0, …): long titles / station names must not widen the column */
+			grid-template-columns: minmax(0, 1fr);
+			/* last line of defence against anything still too wide on phones */
+			overflow-x: clip;
 		}
+	}
+	.music > * {
+		min-width: 0;
 	}
 
 	/* ---- wide screens: record | lyrics, library in a drawer ---- */
@@ -603,7 +723,25 @@
 		max-width: 260px;
 		min-width: 160px;
 	}
+	@media (max-width: 640px) {
+		.library {
+			padding: 14px 8px 10px;
+		}
+		.lib-head {
+			padding: 0 2px 10px;
+		}
+		.tabs button {
+			padding: 4px 10px;
+			font-size: 13.5px;
+		}
+		.search {
+			min-width: 0;
+			max-width: none;
+			flex: 1 1 100%;
+		}
+	}
 	.search input {
+		min-width: 0;
 		border: 0;
 		background: none;
 		outline: none;
@@ -687,6 +825,47 @@
 	.list-head .btn {
 		font-size: 13px;
 		padding: 0.4em 1em;
+	}
+	.sort-bar {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px 12px;
+		padding: 0 6px 10px;
+		font-size: 13px;
+	}
+	.sort {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+	}
+	.sort select {
+		min-width: 0;
+		max-width: 100%;
+		padding: 3px 8px;
+		border-radius: 8px;
+		border: 1px solid var(--line);
+		background: var(--surface);
+		color: var(--text);
+		font: inherit;
+	}
+	.seg {
+		display: inline-flex;
+		gap: 2px;
+		padding: 2px;
+		border-radius: 999px;
+		background: var(--accent-soft);
+	}
+	.seg button {
+		padding: 2px 12px;
+		border-radius: 999px;
+		color: var(--text-muted);
+	}
+	.seg button.on {
+		background: var(--surface);
+		color: var(--text);
+		box-shadow: 0 2px 8px -4px var(--shadow);
 	}
 	.tracks {
 		list-style: none;

@@ -81,6 +81,36 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// changePassword lets a signed-in user change their own password. Other
+// devices are signed out; this one stays signed in.
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	if s.app.Auth.NoAuth() {
+		fail(w, http.StatusBadRequest, "no_auth", "login is disabled (auth.mode: none)")
+		return
+	}
+	var req struct {
+		Old string `json:"old"`
+		New string `json:"new"`
+	}
+	if err := readJSON(r, 4096, &req); err != nil {
+		fail(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	u := auth.FromContext(r.Context())
+	err := s.app.Auth.ChangePassword(s.clientIP(r), u.ID, req.Old, req.New, auth.TokenFromRequest(r))
+	switch {
+	case errors.Is(err, auth.ErrLocked):
+		fail(w, http.StatusTooManyRequests, "locked", "too many attempts, try again later")
+	case errors.Is(err, auth.ErrBadCredentials):
+		fail(w, http.StatusForbidden, "bad_credentials", "the current password is wrong")
+	case err != nil:
+		fail(w, http.StatusBadRequest, "bad_request", err.Error())
+	default:
+		s.log.Info("password changed", "user", u.Name)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":     auth.FromContext(r.Context()), // null for guests

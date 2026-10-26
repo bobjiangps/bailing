@@ -61,7 +61,9 @@
 		library: '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>',
 		download:
 			'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
-		first: '<polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/>'
+		first: '<polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/>',
+		target:
+			'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><line x1="12" x2="12" y1="1" y2="4"/><line x1="12" x2="12" y1="20" y2="23"/><line x1="1" x2="4" y1="12" y2="12"/><line x1="20" x2="23" y1="12" y2="12"/>'
 	};
 </script>
 

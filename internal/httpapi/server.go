@@ -94,6 +94,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	// signed-in
 	mux.HandleFunc("GET /api/me/prefs", requireUser(s.getPrefs))
 	mux.HandleFunc("PUT /api/me/prefs", requireUser(s.putPrefs))
+	mux.HandleFunc("POST /api/me/password", requireUser(s.changePassword))
 
 	mux.HandleFunc("GET /api/stats/summary", requireUser(s.statsSummary))
 	mux.HandleFunc("POST /api/stats/play", requireUser(s.statsPlay))

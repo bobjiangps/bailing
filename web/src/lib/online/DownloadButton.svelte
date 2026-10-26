@@ -9,15 +9,21 @@
 
 	let busy = $state(false);
 	let err = $state('');
+	let note = $state('');
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	async function go() {
 		if (busy) return;
 		busy = true;
 		err = '';
+		note = '';
 		clearTimeout(timer);
 		try {
-			await download(item());
+			const r = await download(item());
+			if (r.lower) {
+				note = t('music.dlQuality', { q: r.lower });
+				timer = setTimeout(() => (note = ''), 6000);
+			}
 		} catch (e) {
 			err = t('music.downloadFail', { e: e instanceof Error ? e.message : String(e) });
 			timer = setTimeout(() => (err = ''), 6000);

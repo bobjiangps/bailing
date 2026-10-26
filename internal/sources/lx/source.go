@@ -72,7 +72,7 @@ func (s *Source) Resolve(ctx context.Context, t sources.TrackRef, quality string
 	if err != nil {
 		return nil, err
 	}
-	return &sources.Playable{URL: u, Format: formatFromURL(u, q),
+	return &sources.Playable{URL: u, Format: formatFromURL(u, q), Quality: q,
 		ExpiresAt: time.Now().Add(s.m.ttl)}, nil
 }
 

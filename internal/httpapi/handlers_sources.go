@@ -102,6 +102,9 @@ func (s *Server) playResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"url": p.URL, "format": p.Format, "mode": "direct"}
+	if p.Quality != "" {
+		out["quality"] = p.Quality
+	}
 	if !p.ExpiresAt.IsZero() {
 		out["expires_at"] = p.ExpiresAt.Unix()
 	}

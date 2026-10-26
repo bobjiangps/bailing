@@ -113,6 +113,8 @@ export interface ResolveResult {
 	proxy_url?: string;
 	cors?: boolean;
 	expires_at?: number;
+	/** LX sources: the quality actually delivered (may be below the one asked for) */
+	quality?: string;
 }
 export interface SearchResult {
 	items: TrackRef[];

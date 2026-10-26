@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -101,6 +102,38 @@ func (s *Service) SetPassword(name, password string) error {
 	}
 	_, err = s.db.Exec(`DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE name=?)`,
 		strings.ToLower(name))
+	return err
+}
+
+// ChangePassword is the self-service variant: the old password must match
+// (rate limited like a login). All other sessions of the user are signed
+// out; the session with keepToken (the caller's own) stays valid.
+func (s *Service) ChangePassword(ip string, userID int64, old, password, keepToken string) error {
+	key := fmt.Sprintf("pw:%d", userID)
+	if s.limiter.locked(ip) || s.limiter.locked(key) {
+		return ErrLocked
+	}
+	var hash string
+	if err := s.db.QueryRow(`SELECT pw_hash FROM users WHERE id=?`, userID).Scan(&hash); err != nil {
+		return ErrNotFound
+	}
+	if ok, err := VerifyPassword(hash, old); err != nil || !ok {
+		s.limiter.fail(ip)
+		s.limiter.fail(key)
+		return ErrBadCredentials
+	}
+	s.limiter.reset(key)
+	if len(password) < 6 {
+		return errors.New("password must be at least 6 characters")
+	}
+	h, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE users SET pw_hash=? WHERE id=?`, h, userID); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`DELETE FROM sessions WHERE user_id=? AND token_hash<>?`, userID, hashToken(keepToken))
 	return err
 }
 

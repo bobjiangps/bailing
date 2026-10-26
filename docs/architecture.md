@@ -223,6 +223,8 @@ tracks(id TEXT PK, rel_path TEXT UNIQUE, folder TEXT, title TEXT, artist TEXT,
        genre TEXT, duration_ms INTEGER, format TEXT, size INTEGER, mtime INTEGER,
        cover_key TEXT, color TEXT, lrc_path TEXT, has_embedded_lyrics INTEGER,
        name_guessed INTEGER /*004：歌名/歌手来自文件名而非标签*/)
+-- 005_track_added.sql（2026-10-26）：tracks.added_at INTEGER —— 第一次扫描到的时间，重新扫描不更新；
+--   迁移时已有歌曲取 mtime（没有则取当前时间）。用于「最新添加」排序。
 
 -- 多目录（library.Roots）：rel_path / dir 是相对所属根目录的路径。
 -- 第一个根目录不加前缀（升级前的 id 不变）；其他根目录加 "@<sha1(绝对路径) 前 4 字节 hex>/"，
@@ -295,7 +297,7 @@ lx_scripts(id TEXT PK /*sha1(文件名) 前 12 位*/, file TEXT, enabled INTEGER
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/music/tracks?q=&folder=&artist=&album=&sort=&offset=&limit=` | 歌曲列表。`folder` / `artist` / `album` **出现即过滤**，空值表示「未知歌手 / 未知专辑 / 根目录」那一组；不出现才表示不过滤 |
+| GET | `/api/music/tracks?q=&folder=&artist=&album=&sort=&desc=&offset=&limit=` | 歌曲列表。`folder` / `artist` / `album` **出现即过滤**，空值表示「未知歌手 / 未知专辑 / 根目录」那一组；不出现才表示不过滤。`sort`：空（目录、碟号、曲号、路径）/ `title` / `artist` / `album` / `added` / `mtime` / `duration`，其他值按空处理（白名单，不拼接用户输入）；`desc=1` 倒序（只作用于第一排序键） |
 | GET | `/api/music/groups/{folders|artists|albums}` | 浏览维度：`[{name, count, cover}]` |
 | GET | `/api/music/tracks/{id}/lyrics` | `{status:"ok|none|instrumental", source:"lrc|embedded|lrclib", synced, lines:[{t, text, trans?}]}` |
 | DELETE | `/api/music/tracks/{id}/lyrics` | 清除下载的歌词缓存，下次重新查找（「歌词不对？」） |
@@ -515,6 +517,14 @@ internal/sources/lx/
 解析请求发给脚本的格式与落雪桌面版相同：`{source, action:'musicUrl', info:{type: 音质, musicInfo}}`。脚本没有声明你要的音质时，自动改用它支持的、不高于该音质的最好的一个。
 
 **链接探测（2026-10-21）**：脚本返回 URL 后，服务器先用 `Range: bytes=0-1` 请求一次（6 秒超时）。返回 HTTP ≥ 400 或 `text/html` 时判定为「dead link」，记日志并改问下一个已启用的脚本；全部失败时 `/api/play/resolve` 返回 502，前端看到错误信息里的 `dead link` 就显示「音源脚本给的播放链接打不开」。网络错误不算失败（浏览器直连也许能通）。原因：脚本自己的后端停了以后，脚本照样能加载、照样返回链接，以前浏览器只能显示「这首歌暂时放不了」。
+
+**实际音质识别（2026-10-26）**：部分脚本不管请求哪个音质都返回低音质链接（实测某脚本对 wy 一律给 128k，某脚本对 kw 的 flac 给 320k）。处理：
+
+1. 搜索适配器在 musicInfo 的 `_types[音质].size` 里带上平台给出的文件大小（如 `7.58MB`），`typeSizes` 解析成字节；
+2. 请求音质先用 `bestAvailable` 收敛到这首歌实际有的最高一档（不高于请求值）；
+3. 探测请求从 `Content-Range` 的总长度（或 200 时的 `Content-Length`）得到实际大小，`matchQuality` 找相差 15% 以内的一档；
+4. 实际音质低于请求值：记日志 `lx script delivered a lower quality`，保留为备选（多个时留最好的），继续问下一个脚本；没有更好的结果时返回备选；
+5. 大小未知或对不上任何一档时按请求值处理（不误判）。缓存键含音质；`/api/play/resolve` 返回 `quality` 字段（实际音质），前端下载时低于偏好就提示。
 
 依赖：`github.com/dop251/goja`（MIT 许可，纯 Go 实现，不需要 cgo）。
 
