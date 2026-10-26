@@ -42,7 +42,8 @@ func Open(path string) (*DB, error) {
 	db := &DB{sqldb}
 	if err := db.migrate(); err != nil {
 		sqldb.Close()
-		return nil, err
+		return nil, fmt.Errorf("database %s: %w (is the directory writable? "+
+			"under systemd it must be listed in ReadWritePaths=)", path, err)
 	}
 	return db, nil
 }

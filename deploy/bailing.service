@@ -1,5 +1,5 @@
 # /etc/systemd/system/bailing.service
-# Install:  sudo cp bailing.service /etc/systemd/system/
+# Install:  sudo cp bailing.service /usr/lib/systemd/system/ or /etc/systemd/system/
 #           sudo systemctl daemon-reload && sudo systemctl enable --now bailing
 # Logs:     journalctl -u bailing -f
 
@@ -10,33 +10,43 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=bailing
-Group=bailing
-ExecStart=/opt/bailing/bailing serve -config /etc/bailing/config.yaml
+# Runs as root on this box (no dedicated user). The sandbox below still
+# applies to root: everything outside ReadWritePaths stays read-only.
+# For a dedicated user: useradd --system bailing, then User=/Group=bailing.
+User=root
+Group=root
+#ExecStart=/opt/bailing/bailing serve -config /etc/bailing/config.yaml
+ExecStart=/home/bob/3rd/bailing/bailing-linux-amd64 serve -config /home/bob/3rd/bailing/config.yaml
 Restart=on-failure
 RestartSec=3
 
 # 1 core / 1 GB box: keep bailing (and the vips processes it spawns) bounded.
-MemoryMax=400M
+MemoryMax=200M
 CPUQuota=90%
 
 # hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+# ProtectHome=true hides /home completely - the binary itself could not be
+# started from there (status=203/EXEC). This deployment lives under
+# /home/bob/3rd/bailing, so /home is read-only and only the paths below are
+# writable. With the standard /opt + /etc + /var/lib + /srv layout use true.
+ProtectHome=read-only
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-ReadWritePaths=/var/lib/bailing
+ReadWritePaths=/home/bob/3rd/bailing/misc
 # Photos are read-only for bailing. The music directory is writable so that
 # downloaded lyrics can be saved as <song>.lrc beside the audio
 # (lyrics.save_beside_music). Set it to false and drop the music path below
 # to make music read-only again.
 # Extra photo/music folders listed in config.yml outside /srv/bailing must be
 # added here too (ReadOnlyPaths= / ReadWritePaths=), or systemd hides them.
-ReadOnlyPaths=/srv/bailing /etc/bailing
-ReadWritePaths=/srv/bailing/music
+# Every path listed here MUST exist, otherwise the service fails before it
+# starts (status=226/NAMESPACE). Prefix a path with "-" to make it optional.
+ReadOnlyPaths=/home/bob/3rd/bailing/photos
+ReadWritePaths=/home/bob/3rd/bailing/music
 
 [Install]
 WantedBy=multi-user.target

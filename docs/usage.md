@@ -89,6 +89,8 @@ sudo chown -R $USER:bailing /srv/bailing && sudo chmod -R g+rX /srv/bailing
 sudo chmod -R g+w /srv/bailing/music && sudo find /srv/bailing/music -type d -exec chmod g+s {} +
 ```
 
+> **不想建专用用户、直接用 root 运行**：把 `bailing.service` 里的 `User=` / `Group=` 改成 `root`，上面的 `useradd`、`chown`、`chmod` 都可以省略。service 里的沙箱设置对 root 同样有效：除 `ReadWritePaths` 列出的目录外，其余位置都只读，所以 `paths.data` 和音乐目录必须写在 `ReadWritePaths` 里。代价是万一程序被攻破，攻击者拿到的是 root 权限，因此仍然建议只监听 `127.0.0.1`、由 nginx 对外提供服务。
+
 ### 2.2 安装 libvips
 
 ```bash
@@ -121,7 +123,7 @@ Debian 默认没有启用防火墙（没有 ufw），端口只需在阿里云安
 在 Mac 上执行（Windows 用 `.\scripts\build.ps1 linux`，见 dev-guide）：
 
 ```bash
-make build-linux                                   # → dist/bailing-linux-amd64（已包含前端）
+make build-linux      or   BASE_PATH=/bailing make build-linux                               # → dist/bailing-linux-amd64（已包含前端）
 scp dist/bailing-linux-amd64   user@ECS:/tmp/bailing
 scp config.example.yaml        user@ECS:/tmp/config.yaml
 scp deploy/bailing.service     user@ECS:/tmp/
@@ -138,7 +140,7 @@ sudo nano /etc/bailing/config.yaml
 #   server.base_url  "https://music.example.com"
 #   paths.*          保持默认即可
 #   traffic.monthly_quota_gb  按你的流量包填写
-sudo cp /tmp/bailing.service /etc/systemd/system/
+sudo cp /tmp/bailing.service /usr/lib/systemd/system/ or /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now bailing
 systemctl status bailing
 curl -s http://127.0.0.1:8080/api/health          # 返回 {"ok":true,...}
@@ -566,6 +568,9 @@ lyrics:
 | 现象 | 可能原因与处理 |
 |---|---|
 | 页面显示「bailing API is running … front end has not been built」 | 编译 Go 之前没有构建前端。用 `make build-linux`（会先构建前端），不要直接 `go build` |
+| 手动运行提示 `Permission denied`，`sudo` 运行提示 `command not found` | 可执行文件没有执行权限（scp / 网页上传都会丢掉权限）：`chmod 755 bailing-linux-amd64`。仍然不行时用 `findmnt -T <所在目录> -o OPTIONS` 看是否有 `noexec` |
+| `systemctl status` 一直在重启，看不出原因 | `journalctl -u bailing -n 50 --no-pager` 看真正的错误。`status=203/EXEC`：没有执行权限，或者放在 `/home` 下却设了 `ProtectHome=true`（改成 `read-only`）；`217/USER`：没有 `bailing` 用户（见 2.1）；`226/NAMESPACE`：`ReadOnlyPaths` / `ReadWritePaths` 里有不存在的目录 |
+| 服务起来了但报 `permission denied` / `readonly database` | `bailing` 用户对目录没有权限：数据目录和音乐目录要 `chown -R bailing:bailing`；放在 `/home/xxx` 下时上级目录要允许进入（`chmod o+x /home/xxx …`）；`paths.data` 必须在 `ReadWritePaths` 里 |
 | 子路径模式下页面空白、资源 404 | 构建时没带 `BASE_PATH=/bailing`，或者 `base_path` 和 nginx 的 location 不一致 |
 | HEIC 照片一直「冲洗中」或显示裂图 | 服务器的 vips 不支持 heif（见 2.2）；或者正在排队生成，稍后刷新 |
 | 第一次打开相册很慢 | 缩略图在首次扫描后逐张生成；1 核机器上每张 HEIC 大约 0.5～2 秒 |
