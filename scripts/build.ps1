@@ -9,16 +9,22 @@
   .\scripts\build.ps1 windows           # dist\bailing-windows-amd64.exe
   .\scripts\build.ps1 linux             # dist\bailing-linux-amd64 (Ubuntu ECS)
   .\scripts\build.ps1 linux -BasePath /bailing
+  .\scripts\build.ps1 linux -App music  # music-only edition (all | photos | music)
+  .\scripts\build.ps1 desktop-deps      # once: add Wails to desktop/go.mod
+  .\scripts\build.ps1 desktop -App music  # desktop\build\bin\bailing-music.exe
   .\scripts\build.ps1 test
 
   If scripts are blocked:  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'deps', 'dev-api', 'dev-web', 'web', 'windows', 'linux', 'linux-arm64', 'mac', 'test', 'lint', 'fmt', 'clean')]
+    [ValidateSet('help', 'deps', 'dev-api', 'dev-web', 'web', 'windows', 'linux', 'linux-arm64', 'mac',
+        'desktop-deps', 'desktop', 'desktop-dev', 'test', 'lint', 'fmt', 'clean')]
     [string]$Target = 'help',
     [string]$Config = 'config.dev.yaml',
-    [string]$BasePath = ''
+    [string]$BasePath = '',
+    [ValidateSet('all', 'photos', 'music')]
+    [string]$App = 'all'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,6 +42,7 @@ function Invoke-Checked([scriptblock]$Block) {
 
 function Build-Web {
     $env:BASE_PATH = $BasePath
+    $env:VITE_BAILING_APP = $App
     Invoke-Checked { npm --prefix web run build }
     New-Item -ItemType File -Force -Path 'internal/webui/dist/.gitkeep' | Out-Null
 }
@@ -75,9 +82,18 @@ switch ($Target) {
     'desktop' {
         Build-Web
         Copy-Item "desktop/build/appicon-$App.png" 'desktop/build/appicon.png' -Force
+        # regenerate icon.ico from this edition's appicon.png
+        Remove-Item -Recurse -Force 'desktop/build/windows' -ErrorAction SilentlyContinue
         Push-Location desktop
         try {
             Invoke-Checked { wails build -clean -ldflags "-X main.edition=$App -X main.version=$Version" -o "bailing-$App.exe" }
+        } finally { Pop-Location }
+    }
+    'desktop-dev' {
+        Build-Web
+        Push-Location desktop
+        try {
+            Invoke-Checked { wails dev -ldflags "-X main.edition=$App" }
         } finally { Pop-Location }
     }
     'windows' { Build-Go 'windows' 'amd64' 'bailing-windows-amd64.exe' }

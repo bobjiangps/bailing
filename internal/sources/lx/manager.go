@@ -63,6 +63,94 @@ type Manager struct {
 type cachedURL struct {
 	url string
 	exp time.Time
+	// verified: the probed size matched the quality asked for (or the
+	// platform gave no sizes to compare with), so a strict download may
+	// reuse it
+	verified bool
+	// script that gave the link (shown as "downloaded from ...")
+	script string
+}
+
+// Attempt is one step of a resolve, reported live (WithProgress) so the
+// download dialog can show which source script is tried, why one was
+// rejected and which one the file finally comes from.
+type Attempt struct {
+	Script  string `json:"script"`
+	Quality string `json:"quality"`
+	// Status: trying | bad | ok
+	Status string `json:"status"`
+	// Kind of a failure: no_quality | error | dead | mismatch | lower
+	Kind   string `json:"kind,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// Bytes: the file's real size; Expected: the size the platform lists
+	Bytes    int64 `json:"bytes,omitempty"`
+	Expected int64 `json:"expected,omitempty"`
+	// Got: the quality the file's size looks like
+	Got    string `json:"got,omitempty"`
+	Cached bool   `json:"cached,omitempty"`
+}
+
+type progressKey struct{}
+
+// WithProgress makes Resolve call fn for every step (trying a script, a
+// script rejected and why, the script that delivered). fn runs on the
+// resolving goroutine.
+func WithProgress(ctx context.Context, fn func(Attempt)) context.Context {
+	return context.WithValue(ctx, progressKey{}, fn)
+}
+
+func report(ctx context.Context, a Attempt) {
+	if fn, ok := ctx.Value(progressKey{}).(func(Attempt)); ok && fn != nil {
+		fn(a)
+	}
+}
+
+// ErrBadQuality: scripts answered for this quality, but none of the files
+// is that quality (an error body, a far smaller / different file, or a
+// downgrade). Only returned in strict mode (downloads).
+var ErrBadQuality = errors.New("bad quality")
+
+type strictKey struct{}
+
+// WithStrict marks a resolve as a download: the file must really be the
+// quality asked for (no downgraded fallback, no size mismatch).
+func WithStrict(ctx context.Context) context.Context {
+	return context.WithValue(ctx, strictKey{}, true)
+}
+
+func isStrict(ctx context.Context) bool {
+	v, _ := ctx.Value(strictKey{}).(bool)
+	return v
+}
+
+// strictMismatch tells why a file of size bytes is not the quality whose
+// listed size is want ("" = it is). got is the quality the size looks like.
+func strictMismatch(size, want int64, got string) string {
+	if size <= 0 {
+		return "the server did not tell the file size, so it cannot be checked"
+	}
+	d := float64(size-want) / float64(want)
+	if d < 0 {
+		d = -d
+	}
+	if d <= 0.15 {
+		return ""
+	}
+	if got != "" {
+		return fmt.Sprintf("file is %s, which is the %s version", humanSize(size), got)
+	}
+	return fmt.Sprintf("file is %s", humanSize(size))
+}
+
+// humanSize formats a byte count like the platforms do ("3.18MB", "39 B").
+func humanSize(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.2fMB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0fKB", float64(n)/(1<<10))
+	}
+	return fmt.Sprintf("%d B", n)
 }
 
 // NewManager creates a manager; call Reload (or Run) to load scripts.
@@ -390,10 +478,12 @@ func (m *Manager) Resolve(ctx context.Context, platform, quality string, musicIn
 		quality = avail
 	}
 	key := platform + "|" + fmt.Sprint(musicInfo["songmid"]) + "|" + fmt.Sprint(musicInfo["hash"]) + "|" + quality
+	strict := isStrict(ctx)
 	m.cacheMu.Lock()
-	if c, ok := m.cache[key]; ok && time.Now().Before(c.exp) {
+	if c, ok := m.cache[key]; ok && time.Now().Before(c.exp) && (!strict || c.verified) {
 		m.cacheMu.Unlock()
 		q := strings.SplitN(c.url, "\x00", 2)
+		report(ctx, Attempt{Script: c.script, Quality: q[0], Status: "ok", Cached: true})
 		return q[1], q[0], nil
 	}
 	m.cacheMu.Unlock()
@@ -419,32 +509,47 @@ func (m *Manager) Resolve(ctx context.Context, platform, quality string, musicIn
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].name < cands[j].name })
 
-	remember := func(u, q string) (string, string, error) {
+	remember := func(script, u, q string, verified bool, size int64) (string, string, error) {
 		m.cacheMu.Lock()
 		if len(m.cache) > 2000 {
 			m.cache = map[string]cachedURL{}
 		}
-		m.cache[key] = cachedURL{url: q + "\x00" + u, exp: time.Now().Add(m.ttl)}
+		m.cache[key] = cachedURL{url: q + "\x00" + u, exp: time.Now().Add(m.ttl), verified: verified, script: script}
 		m.cacheMu.Unlock()
+		report(ctx, Attempt{Script: script, Quality: q, Status: "ok", Bytes: size, Expected: sizes[q]})
 		return u, q, nil
 	}
+	bad := func(a Attempt) {
+		a.Status = "bad"
+		report(ctx, a)
+	}
 
-	var fbURL, fbQ string // best downgraded answer so far
+	var fbURL, fbQ, fbScript string // best downgraded answer so far
 	var fbSize int64
 	var errs []string
+	linked := false // some script gave a link (the problem is the file)
 	for _, c := range cands {
 		q := pickQuality(c.q, quality)
+		if strict && q != quality {
+			errs = append(errs, fmt.Sprintf("%s: does not offer %s", c.name, quality))
+			bad(Attempt{Script: c.name, Quality: quality, Kind: "no_quality"})
+			continue
+		}
+		report(ctx, Attempt{Script: c.name, Quality: q, Status: "trying"})
 		info := map[string]any{"type": q, "musicInfo": musicInfo}
 		out, err := c.vm.Request(ctx, platform, "musicUrl", info)
 		if err == nil {
 			u := strings.Trim(strings.TrimSpace(out), `"`)
 			if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+				linked = true
 				size, perr := m.probe(ctx, u)
 				if perr != nil {
 					// the script answered, but with a dead link (its own
-					// backend is down): try the next script
+					// backend is down, or an error body instead of a file):
+					// try the next script
 					m.log.Info("lx link does not work", "script", c.name, "url", clip(u, 120), "err", perr)
 					errs = append(errs, c.name+": "+perr.Error())
+					bad(Attempt{Script: c.name, Quality: q, Kind: "dead", Detail: perr.Error(), Expected: sizes[q]})
 					continue
 				}
 				got := matchQuality(sizes, size)
@@ -452,25 +557,50 @@ func (m *Manager) Resolve(ctx context.Context, platform, quality string, musicIn
 					m.log.Info("lx script delivered a lower quality", "script", c.name,
 						"asked", q, "got", got, "bytes", size)
 					if size > fbSize {
-						fbURL, fbQ, fbSize = u, got, size
+						fbURL, fbQ, fbScript, fbSize = u, got, c.name, size
 					}
-					errs = append(errs, c.name+": gave "+got+" instead of "+q)
+					errs = append(errs, fmt.Sprintf("%s: gave %s (%s) instead of %s", c.name, got, humanSize(size), q))
+					bad(Attempt{Script: c.name, Quality: q, Kind: "lower", Bytes: size, Expected: sizes[q], Got: got})
 					continue
 				}
+				if strict && sizes[q] > 0 {
+					// a download of a chosen quality: the file must be that
+					// quality, i.e. about the size the platform lists for
+					// it. Anything else (a higher or lower quality, some
+					// other file, a size we cannot see) is refused rather
+					// than saved as something the user did not choose.
+					if why := strictMismatch(size, sizes[q], got); why != "" {
+						m.log.Info("lx file does not match the chosen quality", "script", c.name,
+							"asked", q, "expected", sizes[q], "bytes", size, "looks_like", got)
+						errs = append(errs, fmt.Sprintf("%s: %s, %s should be about %s",
+							c.name, why, q, humanSize(sizes[q])))
+						bad(Attempt{Script: c.name, Quality: q, Kind: "mismatch", Detail: why,
+							Bytes: size, Expected: sizes[q], Got: got})
+						continue
+					}
+					return remember(c.name, u, q, true, size)
+				}
+				// verified: the size matched this quality (or there is no
+				// listed size to compare with); an unknown size is not
+				verified := got == q || len(sizes) == 0
 				if got == "" {
 					got = q
 				}
-				return remember(u, got)
+				return remember(c.name, u, got, verified, size)
 			}
 			err = fmt.Errorf("script returned %q", clip(out, 80))
 		}
 		errs = append(errs, c.name+": "+err.Error())
+		bad(Attempt{Script: c.name, Quality: q, Kind: "error", Detail: clip(err.Error(), 160)})
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	if fbURL != "" {
-		return remember(fbURL, fbQ)
+	if fbURL != "" && !strict {
+		return remember(fbScript, fbURL, fbQ, false, fbSize)
+	}
+	if strict && linked {
+		return "", "", fmt.Errorf("%w: %s", ErrBadQuality, strings.Join(errs, "; "))
 	}
 	return "", "", errors.New(strings.Join(errs, "; "))
 }
@@ -580,6 +710,12 @@ func (m *Manager) probe(ctx context.Context, u string) (int64, error) {
 	if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
 		return 0, errors.New("dead link (web page instead of audio)")
 	}
+	// an error message from the platform / script backend dressed up as a
+	// file (seen: kg 128k answering with a 39-byte JSON body)
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.HasPrefix(ct, "text/") || strings.Contains(ct, "json") || strings.Contains(ct, "xml") {
+		return 0, fmt.Errorf("dead link (%s instead of audio)", strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
+	}
 	var size int64
 	if cr := resp.Header.Get("Content-Range"); cr != "" {
 		if i := strings.LastIndexByte(cr, '/'); i >= 0 {
@@ -588,8 +724,15 @@ func (m *Manager) probe(ctx context.Context, u string) (int64, error) {
 	} else if resp.StatusCode == http.StatusOK {
 		size = resp.ContentLength
 	}
+	if size > 0 && size < minAudioBytes {
+		return 0, fmt.Errorf("dead link (not audio: only %d bytes)", size)
+	}
 	return size, nil
 }
+
+// minAudioBytes: anything smaller is an error message, not a song (even 30
+// seconds of 128k mp3 are about 480 KB).
+const minAudioBytes = 64 << 10
 
 func (m *Manager) clearCache() {
 	m.cacheMu.Lock()

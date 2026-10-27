@@ -5,6 +5,7 @@ import {
 	beacon,
 	coverUrl,
 	trackUrl,
+	type LyricsCandidate,
 	type LyricsResult,
 	type ResolveResult,
 	type SavedItem,
@@ -651,6 +652,48 @@ class Player {
 		const cur = this.current;
 		if (!cur || cur.source !== 'local') return;
 		await api(`/api/music/tracks/${cur.id}/lyrics`, { method: 'DELETE' }).catch(() => {});
+		this.loadLyrics(cur);
+	}
+
+	/** Manual search with the user's own keywords (title / artist / album). */
+	async searchLyrics(q: { title: string; artist: string; album: string }) {
+		const p = new URLSearchParams({
+			title: q.title.trim(),
+			artist: q.artist.trim(),
+			album: q.album.trim(),
+			duration_ms: String(this.current?.duration_ms || 0)
+		});
+		const r = await api<{ results: LyricsCandidate[] }>(`/api/lyrics/search?${p}`);
+		return r.results ?? [];
+	}
+
+	/** Use one manual search result for the current song (saved on the server). */
+	async pickLyrics(lrclibId: number) {
+		const cur = this.current;
+		if (!cur || cur.live || cur.source === 'radio') return;
+		const r =
+			cur.source === 'local'
+				? await api<LyricsResult>(`/api/music/tracks/${cur.id}/lyrics`, {
+						method: 'PUT',
+						body: { lrclib_id: lrclibId }
+					})
+				: await api<LyricsResult>('/api/lyrics/pick', {
+						method: 'PUT',
+						body: { title: cur.title, artist: cur.artist, album: cur.album, lrclib_id: lrclibId }
+					});
+		if (this.current === cur) this.lyrics = r;
+	}
+
+	/** Forget a manual pick and go back to the automatic match. */
+	async resetLyrics() {
+		const cur = this.current;
+		if (!cur) return;
+		if (cur.source === 'local') {
+			await api(`/api/music/tracks/${cur.id}/lyrics`, { method: 'DELETE' }).catch(() => {});
+		} else {
+			const p = new URLSearchParams({ title: cur.title, artist: cur.artist, album: cur.album });
+			await api(`/api/lyrics/pick?${p}`, { method: 'DELETE' }).catch(() => {});
+		}
 		this.loadLyrics(cur);
 	}
 

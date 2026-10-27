@@ -28,6 +28,7 @@
 		const tag = (e.target as HTMLElement)?.tagName;
 		if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
 		if (document.querySelector('.viewer')) return; // photo viewer owns the keyboard
+		if (document.querySelector('dialog[open]')) return; // a modal dialog (e.g. download) owns it too
 		if (!cur) return;
 		switch (e.key) {
 			case ' ':

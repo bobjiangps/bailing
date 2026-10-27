@@ -3,6 +3,7 @@
 	// current time and the list is translated so it sits ~38% from the top.
 	import { t } from '$lib/i18n';
 	import { player } from './player.svelte';
+	import LyricsSearch from './LyricsSearch.svelte';
 
 	let box: HTMLDivElement | undefined = $state();
 	let lineEls: HTMLElement[] = $state([]);
@@ -45,6 +46,9 @@
 	}
 
 	const sourceLabel = $derived(player.lyrics?.source ? t('lyrics.src.' + player.lyrics.source) : '');
+	/** manual search is possible for any song with a title (not radio / live) */
+	const canSearch = $derived(!!player.current && !player.current.live && player.current.source !== 'radio');
+	let searchDlg: LyricsSearch | undefined = $state();
 </script>
 
 <div class="lyrics" bind:this={box}>
@@ -55,7 +59,14 @@
 	{:else if player.lyrics?.source === 'radio'}
 		<p class="hint art">{t('lyrics.radio')}</p>
 	{:else if !player.lyrics || player.lyrics.status === 'none'}
-		<p class="hint art">{t('lyrics.none')}</p>
+		<div class="hint art">
+			<div>
+				<p>{t('lyrics.none')}</p>
+				{#if canSearch}
+					<button class="btn small-btn" onclick={() => searchDlg?.open()}>{t('lyrics.manual')}</button>
+				{/if}
+			</div>
+		</div>
 	{:else if player.lyrics.status === 'instrumental'}
 		<p class="hint art">{t('lyrics.instrumental')}</p>
 	{:else}
@@ -76,14 +87,19 @@
 		<div class="pad"></div>
 	{/if}
 </div>
-{#if player.lyrics?.status === 'ok'}
+{#if player.lyrics && (player.lyrics.status === 'ok' || player.lyrics.status === 'instrumental') && canSearch}
 	<div class="meta">
-		<span>{sourceLabel}</span>
+		{#if player.lyrics.status === 'ok'}<span>{sourceLabel}</span> · {/if}
 		{#if player.lyrics.source === 'lrclib' && player.current?.source === 'local'}
-			· <button class="link" onclick={() => player.refetchLyrics()}>{t('lyrics.refetch')}</button>
+			<button class="link" onclick={() => player.refetchLyrics()}>{t('lyrics.refetch')}</button> ·
+		{/if}
+		<button class="link" onclick={() => searchDlg?.open()}>{t('lyrics.manualOther')}</button>
+		{#if player.lyrics.source === 'manual'}
+			· <button class="link" onclick={() => player.resetLyrics()}>{t('lyrics.reset')}</button>
 		{/if}
 	</div>
 {/if}
+{#if canSearch}<LyricsSearch bind:this={searchDlg} />{/if}
 
 <style>
 	.lyrics {
@@ -157,5 +173,12 @@
 	.link {
 		text-decoration: underline;
 		text-underline-offset: 3px;
+	}
+	.hint p {
+		margin: 0;
+	}
+	.small-btn {
+		margin-top: 14px;
+		font-size: 13px;
 	}
 </style>

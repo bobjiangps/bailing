@@ -237,8 +237,10 @@ play_events(id INTEGER PK, user_id INTEGER, source TEXT /*local|direct|radio|lx:
             ref TEXT, title TEXT, artist TEXT, cover TEXT, listened_ms INTEGER, at INTEGER)
 view_events(id INTEGER PK, user_id INTEGER, kind TEXT /*album|photo*/, ref TEXT, at INTEGER)
 
--- 歌词缓存（LRCLIB 下载结果，含「没找到」的负缓存）
-lyrics_cache(track_id TEXT PK, status TEXT, source TEXT, ...)
+-- 歌词缓存（LRCLIB 下载结果，含「没找到」的负缓存；source='manual' 为手动选择，优先级最高）
+lyrics_cache(track_id TEXT PK, status TEXT, source TEXT, body TEXT, fetched_at INTEGER)
+-- 006（2026-10-27）：在线歌曲（落雪、链接）手动选择的歌词。key = lower(歌名)\0lower(歌手)\0lower(专辑)
+lyrics_override(key TEXT PK, status TEXT, body TEXT, lrclib_id INTEGER, updated_at INTEGER)
 
 -- 流量
 traffic_daily(day TEXT, category TEXT /*photo|cover|track|proxy|app*/, bytes INTEGER,
@@ -260,7 +262,7 @@ lx_scripts(id TEXT PK /*sha1(文件名) 前 12 位*/, file TEXT, enabled INTEGER
 
 - 「最常播放」：对 `play_events` 按 `ref` 分组计数（数据量小，不需要预先汇总）。
 - 在线歌曲没有本地 ID，收藏和歌单用 `data` 保存重新播放所需的信息（JSON 快照：source、id、标题、歌手、封面、extra；本地歌曲另存 color、format、folder）。服务器只检查 `source` 和 `id`，单条最大 32KB；每人最多 5000 个收藏、200 个歌单，每个歌单最多 2000 首。
-- 数据库启用 WAL 模式（读写可以同时进行）；只开一个写连接，避免并发写冲突。
+- 数据库启用 WAL 模式（读写可以同时进行）；只开一个写连接，避免并发写冲突。运行时同目录会出现 `bailing.db-wal`（尚未合并进主文件的新写入）和 `bailing.db-shm`（WAL 的共享内存索引），正常关闭时 SQLite 把 WAL 合并回 `bailing.db` 并删除这两个文件。**服务运行中不要单独复制 `bailing.db`**（会漏掉 WAL 里的数据），要么先停服务，要么用 `sqlite3 bailing.db ".backup x.db"`。
 
 ## 6. HTTP 接口
 
@@ -299,8 +301,9 @@ lx_scripts(id TEXT PK /*sha1(文件名) 前 12 位*/, file TEXT, enabled INTEGER
 |---|---|---|
 | GET | `/api/music/tracks?q=&folder=&artist=&album=&sort=&desc=&offset=&limit=` | 歌曲列表。`folder` / `artist` / `album` **出现即过滤**，空值表示「未知歌手 / 未知专辑 / 根目录」那一组；不出现才表示不过滤。`sort`：空（目录、碟号、曲号、路径）/ `title` / `artist` / `album` / `added` / `mtime` / `duration`，其他值按空处理（白名单，不拼接用户输入）；`desc=1` 倒序（只作用于第一排序键） |
 | GET | `/api/music/groups/{folders|artists|albums}` | 浏览维度：`[{name, count, cover}]` |
-| GET | `/api/music/tracks/{id}/lyrics` | `{status:"ok|none|instrumental", source:"lrc|embedded|lrclib", synced, lines:[{t, text, trans?}]}` |
-| DELETE | `/api/music/tracks/{id}/lyrics` | 清除下载的歌词缓存，下次重新查找（「歌词不对？」） |
+| GET | `/api/music/tracks/{id}/lyrics` | `{status:"ok|none|instrumental", source:"lrc|embedded|lrclib|manual", synced, lines:[{t, text, trans?}]}` |
+| DELETE | `/api/music/tracks/{id}/lyrics` | 清除下载的歌词缓存（含手动选择），下次重新自动查找（「歌词不对？」「恢复自动匹配」） |
+| PUT | `/api/music/tracks/{id}/lyrics` | `{lrclib_id}`：手动选择歌词（2026-10-27）。存入 `lyrics_cache`（`source='manual'`，优先级最高）；`save_beside_music` 时同时写 `.lrc`（已有的先备份为 `.lrc.bak`）。返回同 GET |
 | POST | `/api/music/tracks/{id}/duration` | `{ms}`：浏览器测得的时长回填（有些文件标签里没有时长） |
 | GET | `/media/track/{id}?sid=&dl=1` | 音频流，支持分段读取；`sid` 把同一次播放的所有分段请求归到同一个流量计数；`dl=1` 加 `Content-Disposition: attachment`（文件名「歌手 - 歌名.ext」，UTF-8 用 `filename*`） |
 | GET | `/media/cover/{key}?size=s|m` | 封面 |
@@ -312,7 +315,7 @@ lx_scripts(id TEXT PK /*sha1(文件名) 前 12 位*/, file TEXT, enabled INTEGER
 |---|---|---|
 | GET | `/api/sources` | 已注册的音源及能力：`local`、`direct`、`radio`、`lx:kw` …；落雪平台只有在有脚本支持时才带 `resolve` 能力和 `qualities` |
 | GET | `/api/sources/{id}/search?q=&page=` | 搜索（`radio`、`lx:*`、`local`） |
-| POST | `/api/play/resolve` | `{source, track: TrackRef, quality}` → `{url, format, mode, proxy_url, cors, expires_at}` |
+| POST | `/api/play/resolve` | `{source, track: TrackRef, quality, strict?, progress?}` → `{url, format, mode, proxy_url, cors, expires_at, quality}`；`strict` 见 7.3 第 7 条，`progress` 见第 8 条 |
 | GET | `/api/radio/stations?q=&country=&tag=&lang=&page=` | 电台搜索（服务器缓存 10 分钟） |
 | GET | `/api/radio/countries` | 地区列表（缓存 1 天） |
 | GET | `/api/lyrics/lookup?title=&artist=&album=&duration_ms=` | 在线歌曲的歌词（LRCLIB，内存缓存 6 小时） |
@@ -525,6 +528,9 @@ internal/sources/lx/
 3. 探测请求从 `Content-Range` 的总长度（或 200 时的 `Content-Length`）得到实际大小，`matchQuality` 找相差 15% 以内的一档；
 4. 实际音质低于请求值：记日志 `lx script delivered a lower quality`，保留为备选（多个时留最好的），继续问下一个脚本；没有更好的结果时返回备选；
 5. 大小未知或对不上任何一档时按请求值处理（不误判）。缓存键含音质；`/api/play/resolve` 返回 `quality` 字段（实际音质），前端下载时低于偏好就提示。
+6. 不是音频的链接也算失效（2026-10-26，实测酷狗 128k 返回 39 字节的错误内容）：探测时 `Content-Type` 为 `text/*`、`json`、`xml`，或总大小 < 64KB，都按「dead link」处理，换下一个脚本。
+7. **严格模式（下载确认框）**：`/api/play/resolve` 带 `strict: true` 时（`lx.WithStrict(ctx)`），文件必须就是所选音质：脚本没声明该音质的跳过；平台标注了该档大小时，探测大小必须与它相差不超过 15%——更小、更大（例如要 128k 却给了 320k 的文件）、或服务器不告诉大小（无法核对）都算失败（`strictMismatch`）；降级结果不作为备选。全部失败且至少有一个脚本给过链接时返回 **422 `bad_quality`**，消息是每个脚本的原因（如 `xx: dead link (not audio: only 39 bytes)`、`xx: file is 1.20MB, 128k should be about 3.18MB`），前端据此提示「文件异常，未下载」。缓存项记录是否经过大小核对（`verified`），严格模式只复用核对过的缓存。普通播放不受影响，仍允许降级备选。
+8. **逐源进度（2026-10-26）**：`/api/play/resolve` 带 `progress: true` 时（下载用），响应改为 NDJSON（`application/x-ndjson`，带 `X-Accel-Buffering: no` 让 nginx 不缓冲，每行写完立即 Flush）：每试一个脚本推一行 `{"type":"step","step":{script, quality, status, kind, detail, bytes, expected, got, cached}}`，`status` 为 `trying` / `bad` / `ok`，`kind`（失败原因）为 `no_quality`（不提供该音质）/ `dead`（链接打不开或不是音频）/ `mismatch`（大小对不上）/ `lower`（给的是更低音质）/ `error`（脚本出错）；最后一行是 `{"type":"done","result":{…同上…}}` 或 `{"type":"error","status","code","error"}`。实现：`lx.WithProgress(ctx, fn)`，`Manager.Resolve` 在各分支调用 `report`；缓存项记录给出链接的脚本名，命中缓存时推一行 `ok`（`cached: true`），所以缓存命中也能说出来源。前端下载确认框据此逐行显示「A 源的 128k 文件有错误 → 切换到 B 源 → 从 B 源下载」；不弹确认框的直接下载在按钮旁提示来源。普通播放不带 `progress`，仍是一次性 JSON。
 
 依赖：`github.com/dop251/goja`（MIT 许可，纯 Go 实现，不需要 cgo）。
 
@@ -588,7 +594,9 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    A[GET lyrics] --> B{同名 .lrc?}
+    A[GET lyrics] --> M{手动选择过?<br/>lyrics_cache.source=manual}
+    M -- 有 --> OK[返回]
+    M -- 无 --> B{同名 .lrc?}
     B -- 有 --> OK[返回]
     B -- 无 --> C{内嵌歌词?}
     C -- 有 --> OK
@@ -606,6 +614,9 @@ flowchart LR
 - 歌名、歌手完全一致但时长相差 > 5 秒（剪辑版 / 现场版）时，只取纯文本（`Approx`），去掉时间轴，不写 `.lrc`，以免以后一直用这份对不上时间的歌词。
 - 没有标签的本地文件，歌名和歌手由文件名推断：`music.nameOrder` 读同目录有标签的文件，对比文件名和标签投票决定「歌名 - 歌手」还是「歌手 - 歌名」；同目录无依据时用整个曲库（`name_guessed = 0` 的行）投票；仍无依据时按「歌手 - 歌名」。迁移 004 把所有 `mtime` 置 0 以触发一次全量重新索引，并清掉旧的负缓存。
 - LRC 解析在服务器端完成（`internal/lyrics/lrc.go`）：多时间戳、`[offset:]`、同一时间戳的第二行作为翻译。
+- **手动搜索**（`internal/lyrics/manual.go`，2026-10-27）：用户在歌词面板输入歌名 / 歌手 / 专辑 → `GET /api/lyrics/search` → 选一条 → 本地歌曲 `PUT /api/music/tracks/{id}/lyrics`，在线歌曲 `PUT /api/lyrics/pick`。服务器按 LRCLIB 的 id（`/api/get/{id}`）重新取全文后保存，不信任前端传来的歌词内容。手动选择优先于 `.lrc` 和内嵌歌词；扫描时文件变化不会清掉它（只清 `status<>'found'`），删除歌曲时一起删除。
+- **歌词存放位置**：本地歌曲 = `lyrics_cache` +（可选）歌曲旁的 `.lrc`；在线歌曲（落雪、链接）**没有本地文件，不写任何 .lrc**，自动查到的只在内存缓存 6 小时，手动选择的存 `lyrics_override` 表。
+- **只支持 LRCLIB 协议**：`lyrics.lrclib_base` 只能换成 LRCLIB 兼容的服务（官方站或自建的 LRCLIB 实例）。网易云、QQ、酷狗等国内歌词接口协议不同，需要另写 provider（`lrclib` 结构旁边加一个实现，在 `Service.fetch` / `Lookup` 里按顺序尝试），见使用手册 5.2。
 
 ## 9. 前端架构要点
 

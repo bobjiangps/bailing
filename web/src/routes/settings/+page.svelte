@@ -291,6 +291,10 @@
 				{#each ['128k', '320k', 'flac', 'flac24bit'] as q (q)}<option value={q}>{q}</option>{/each}
 			</select>
 		</div>
+		<label class="row switch">
+			<span class="k">{t('settings.dlAsk')}</span>
+			<input type="checkbox" checked={prefs.dlAsk} onchange={(e) => prefs.set('dlAsk', e.currentTarget.checked)} />
+		</label>
 	</section>
 
 	<!-- LX scripts (admin) -->

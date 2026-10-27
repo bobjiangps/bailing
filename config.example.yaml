@@ -39,13 +39,13 @@ imaging:
 
 lyrics:
   online: true                      # download from LRCLIB when no local lyrics exist
-  lrclib_base: "https://lrclib.net"
+  lrclib_base: "https://lrclib.net"  # only LRCLIB-compatible APIs (official site or a self-hosted lrclib); see docs/usage.md 5.2
   negative_ttl: "168h"              # remember "not found" for 7 days
   timeout: "8s"
   save_beside_music: true           # also write <song>.lrc next to the audio (music dir must be writable; otherwise only cached in the DB)
 
 traffic:
-  monthly_quota_gb: 0               # 0 = no quota; e.g. 50 shows a banner at warn_percent
+  monthly_quota_gb: 1               # 0 = no quota; e.g. 50 shows a banner at warn_percent
   warn_percent: 80
   reset_day: 1                      # billing month starts on this day (1-28)
   block_proxy_over_quota: true      # P2: stop server relaying when over quota

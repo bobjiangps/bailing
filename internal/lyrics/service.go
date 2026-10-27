@@ -221,10 +221,17 @@ var (
 // Results, including "not found", are kept in memory for 6 hours.
 func (s *Service) Lookup(ctx context.Context, title, artist, album string, durMs int64) *Result {
 	title = strings.TrimSpace(title)
-	if title == "" || !s.opt.Online {
+	if title == "" {
 		return none()
 	}
-	key := strings.ToLower(title + "\x00" + artist + "\x00" + album)
+	key := onlineKey(title, artist, album)
+	// picked by hand earlier (persisted in the database)
+	if r := s.override(key); r != nil {
+		return r
+	}
+	if !s.opt.Online {
+		return none()
+	}
 	memMu.Lock()
 	if e, ok := memCache[key]; ok && time.Since(e.at) < 6*time.Hour {
 		memMu.Unlock()

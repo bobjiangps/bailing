@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -70,6 +71,13 @@ func (s *Server) playResolve(w http.ResponseWriter, r *http.Request) {
 		// spectrum), so it needs to know whether the origin allows CORS for
 		// plain audio files too, not only for HLS.
 		NeedCORS bool `json:"need_cors"`
+		// Strict: a download. The file must really be the chosen quality:
+		// no downgraded fallback, no file far from the listed size.
+		Strict bool `json:"strict"`
+		// Progress: answer as NDJSON, one line per step (which LX source
+		// script is tried, why one is rejected, which one delivered), then
+		// a final {"type":"done"|"error"} line. Used by downloads.
+		Progress bool `json:"progress"`
 	}
 	if err := readJSON(r, 256<<10, &body); err != nil || !reSource.MatchString(body.Source) || body.Source == "local" {
 		fail(w, http.StatusBadRequest, "bad_request", "invalid resolve request")
@@ -88,18 +96,65 @@ func (s *Server) playResolve(w http.ResponseWriter, r *http.Request) {
 	body.Track.Source = body.Source
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	p, err := res.Resolve(ctx, body.Track, body.Quality)
-	if err != nil {
-		s.log.Info("resolve failed", "source", body.Source, "title", body.Track.Title, "err", err)
-		fail(w, http.StatusBadGateway, "resolve_failed", err.Error())
+	rctx := ctx
+	if body.Strict {
+		rctx = lx.WithStrict(rctx)
+	}
+
+	var emit func(v any)
+	if body.Progress {
+		fl, _ := w.(http.Flusher)
+		h := w.Header()
+		h.Set("Content-Type", "application/x-ndjson; charset=utf-8")
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Accel-Buffering", "no") // nginx: pass every line on at once
+		w.WriteHeader(http.StatusOK)
+		enc := json.NewEncoder(w)
+		emit = func(v any) {
+			enc.Encode(v)
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		rctx = lx.WithProgress(rctx, func(a lx.Attempt) {
+			emit(map[string]any{"type": "step", "step": a})
+		})
+	}
+
+	p, err := res.Resolve(rctx, body.Track, body.Quality)
+	out, status, code, msg := s.resolveOutput(ctx, r, body.Source, body.Track, body.Quality, body.NeedCORS, p, err)
+	if emit != nil {
+		if status != http.StatusOK {
+			emit(map[string]any{"type": "error", "status": status, "code": code, "error": msg})
+		} else {
+			emit(map[string]any{"type": "done", "result": out})
+		}
 		return
+	}
+	if status != http.StatusOK {
+		fail(w, status, code, msg)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// resolveOutput turns a resolve result into the response body (or an
+// error status, code and message).
+func (s *Server) resolveOutput(ctx context.Context, r *http.Request, source string, track sources.TrackRef,
+	quality string, needCORS bool, p *sources.Playable, err error) (map[string]any, int, string, string) {
+	if err != nil {
+		s.log.Info("resolve failed", "source", source, "title", track.Title, "quality", quality, "err", err)
+		if errors.Is(err, lx.ErrBadQuality) {
+			return nil, http.StatusUnprocessableEntity, "bad_quality",
+				strings.TrimPrefix(err.Error(), lx.ErrBadQuality.Error()+": ")
+		}
+		return nil, http.StatusBadGateway, "resolve_failed", err.Error()
 	}
 
 	proxyOn := s.app.Cfg.Sources.Proxy.Enabled
 	needProxy := len(p.Headers) > 0 // custom headers can only be sent by the server
 	if needProxy && !proxyOn {
-		fail(w, http.StatusForbidden, "proxy_disabled", "this song needs the server relay, which is disabled")
-		return
+		return nil, http.StatusForbidden, "proxy_disabled", "this song needs the server relay, which is disabled"
 	}
 	out := map[string]any{"url": p.URL, "format": p.Format, "mode": "direct"}
 	if p.Quality != "" {
@@ -117,13 +172,13 @@ func (s *Server) playResolve(w http.ResponseWriter, r *http.Request) {
 			kind = proxy.KindPlaylist
 		}
 		link := s.app.Signer.URL(proxy.Target{URL: p.URL, Headers: p.Headers, Kind: kind,
-			Ref: clipStr(body.Track.ID, 200), Title: clipStr(body.Track.Title, 120)})
+			Ref: clipStr(track.ID, 200), Title: clipStr(track.Title, 120)})
 		out["proxy_url"] = strings.TrimPrefix(link, s.basePath)
 	}
-	if (p.Format == "hls" || body.NeedCORS) && !needProxy {
+	if (p.Format == "hls" || needCORS) && !needProxy {
 		out["cors"] = s.corsOK(ctx, p.URL, requestOrigin(r, s.app.Cfg.Server.BaseURL))
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out, http.StatusOK, "", ""
 }
 
 func requestOrigin(r *http.Request, baseURL string) string {

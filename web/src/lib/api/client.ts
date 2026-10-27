@@ -228,6 +228,17 @@ export interface LyricsResult {
 	synced: boolean;
 	lines: LyricLine[];
 }
+/** One result of the manual lyrics search (GET /api/lyrics/search). */
+export interface LyricsCandidate {
+	id: number;
+	title: string;
+	artist: string;
+	album: string;
+	duration_ms: number;
+	synced: boolean;
+	instrumental: boolean;
+	preview: string;
+}
 export interface StatItem {
 	kind: 'track' | 'album' | 'photo';
 	source?: string;

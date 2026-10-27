@@ -38,6 +38,8 @@ interface Stored {
 	eq?: number[];
 	/** spectrum under the record */
 	spectrum?: boolean;
+	/** online downloads: confirm first (title, quality, size) */
+	dlAsk?: boolean;
 }
 
 /**
@@ -59,6 +61,7 @@ class Prefs {
 	eqPreset = $state('flat');
 	eq = $state<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 	spectrum = $state(false);
+	dlAsk = $state(true);
 
 	/** resolved values actually applied to <html> */
 	dark = $state(false);
@@ -94,6 +97,7 @@ class Prefs {
 		if (Array.isArray(s.eq) && s.eq.length === 10 && s.eq.every((g) => typeof g === 'number'))
 			this.eq = s.eq.map((g) => Math.max(-12, Math.min(12, g)));
 		if (typeof s.spectrum === 'boolean') this.spectrum = s.spectrum;
+		if (typeof s.dlAsk === 'boolean') this.dlAsk = s.dlAsk;
 	}
 
 	/** Load server-side prefs after login (server wins over local). */
@@ -155,7 +159,8 @@ class Prefs {
 			eqOn: this.eqOn,
 			eqPreset: this.eqPreset,
 			eq: [...this.eq],
-			spectrum: this.spectrum
+			spectrum: this.spectrum,
+			dlAsk: this.dlAsk
 		};
 	}
 

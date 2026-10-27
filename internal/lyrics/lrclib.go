@@ -174,6 +174,71 @@ func pickBest(list []lrclibRecord, title string, durMs int64) *lrclibRecord {
 	return best
 }
 
+// search runs a manual search with user-supplied keywords. Several queries
+// are merged (structured, then free text) because LRCLIB's structured search
+// misses entries whose artist or title is spelt a little differently.
+func (c *lrclib) search(ctx context.Context, title, artist, album string) ([]lrclibRecord, error) {
+	var queries []url.Values
+	if title != "" {
+		q := url.Values{}
+		q.Set("track_name", title)
+		if artist != "" {
+			q.Set("artist_name", artist)
+		}
+		if album != "" {
+			q.Set("album_name", album)
+		}
+		queries = append(queries, q)
+		if artist != "" || album != "" {
+			q = url.Values{}
+			q.Set("track_name", title)
+			queries = append(queries, q)
+		}
+	}
+	free := strings.TrimSpace(title + " " + artist)
+	if free != "" {
+		q := url.Values{}
+		q.Set("q", free)
+		queries = append(queries, q)
+	}
+
+	seen := map[int64]bool{}
+	var out []lrclibRecord
+	var firstErr error
+	for _, q := range queries {
+		var list []lrclibRecord
+		if err := c.get(ctx, "/api/search?"+q.Encode(), &list); err != nil {
+			if !errors.Is(err, errNotFound) && firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, r := range list {
+			if r.ID != 0 && seen[r.ID] {
+				continue
+			}
+			seen[r.ID] = true
+			out = append(out, r)
+		}
+		if len(out) >= 40 {
+			break
+		}
+	}
+	if len(out) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
+// byID fetches one LRCLIB record (GET /api/get/{id}).
+func (c *lrclib) byID(ctx context.Context, id int64) (*lrclibRecord, error) {
+	var rec lrclibRecord
+	if err := c.get(ctx, fmt.Sprintf("/api/get/%d", id), &rec); err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
 func (c *lrclib) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {

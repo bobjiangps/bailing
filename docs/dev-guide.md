@@ -314,40 +314,83 @@ make build-linux APP=photos     # 只有相册的服务器版本
 | 3. 下载 Go 依赖 | `make desktop-deps` | `.\scripts\build.ps1 desktop-deps` |
 | 4. 检查环境 | `wails doctor` | 同左 |
 | 5. 构建 | `make desktop APP=all`（或 photos / music） | `.\scripts\build.ps1 desktop -App all` |
+| 5'. 构建另一个系统的版本 | `make desktop-windows APP=music`（在 Mac 上编 Windows 版） | 不支持（macOS 版只能在 Mac 上编） |
+| 调试 | `make desktop-dev APP=music` | `.\scripts\build.ps1 desktop-dev -App music` |
 
 - 产物在 `desktop/build/bin/`（macOS 是 `.app`）；
 - `make desktop` 会先构建对应版本的前端，再把 `desktop/build/appicon-$(APP).png` 复制为应用图标；
 - 桌面端是**单独的 Go 模块**（`desktop/go.mod`），所以根目录的 `go vet ./...`、`make build` 都不需要 Wails；
 - 调试：`make desktop-dev APP=music`；桌面端的日志输出在启动它的终端里，本地服务地址是 `http://127.0.0.1:4782x`，也可以直接用浏览器打开这个地址调试。
 
+**只有 Mac 时构建 Windows 桌面端（交叉编译，2026-10-27）**：
+
+Wails v2 支持在 macOS / Linux 上编出 Windows 版：Windows 版的 WebView2 绑定是纯 Go，不需要 cgo，也不需要 Windows 的 SDK。
+
+```bash
+# 只做一次
+go install github.com/wailsapp/wails/v2/cmd/wails@latest   # 确认 $(go env GOPATH)/bin 在 PATH 里
+make desktop-deps                                          # desktop/go.mod 里加上 wails 依赖
+wails doctor                                               # 可选：检查环境
+
+# 每次构建（APP=all | photos | music）
+make desktop-windows APP=music
+# -> desktop/build/bin/bailing-music.exe
+```
+
+- `make desktop-windows` 和 `make desktop` 的区别只是多了 `-platform windows/amd64`，并在构建前删掉 `desktop/build/windows/`，让 Wails 用当前版本的 `appicon-$(APP).png` 重新生成 `icon.ico` 和清单文件（否则换版本后图标不变）；
+- 产物是**单个 exe**，拷到 Windows 上双击即可运行，不需要安装 Go、Node；
+- 运行条件：Windows 10 / 11 自带 WebView2；极老的 Win10 没有时，按提示安装 Microsoft Edge WebView2 Runtime；
+- 第一次运行会被 SmartScreen 拦截（「Windows 已保护你的电脑」），因为 exe 没有代码签名：点「更多信息 → 仍要运行」；
+- 在 Mac 上**没法运行和调试** Windows 版：功能调试用 `make desktop-dev` 或浏览器完成，Windows 上只做最后的验证；
+- 照片缩略图、HEIC 需要 Windows 上安装 libvips，并在 `%AppData%\Bailing\config.yaml` 的 `imaging.vips_bin_dir` 填 `C:/tools/vips/bin` 这类路径（只用音乐版可以不装：没有 vips 时歌曲封面直接用原图，只是稍大）；
+- 想要安装包（开始菜单、卸载）：`brew install makensis`，在 Makefile 的 `wails build` 后面加 `-nsis`，会额外生成 `*-installer.exe`（可选）；
+- 反过来（在 Windows 上编 macOS 版）不行：macOS 版需要 cgo 和 Xcode，只能在 Mac 上编。
+
 ## 6. Makefile ⇄ PowerShell 对照
 
-| make | PowerShell |
-|---|---|
-| `make deps` | `.\scripts\build.ps1 deps` |
-| `make dev-api` | `.\scripts\build.ps1 dev-api` |
-| `make dev-web` | `.\scripts\build.ps1 dev-web` |
-| `make web` | `.\scripts\build.ps1 web` |
-| `make web APP=music` | `.\scripts\build.ps1 web -App music` |
-| `make build-linux` | `.\scripts\build.ps1 linux` |
-| `make build-windows` | `.\scripts\build.ps1 windows` |
-| `make test` / `lint` / `fmt` / `clean` | `.\scripts\build.ps1 test` / `lint` / `fmt` / `clean` |
-| `CONFIG=x.yaml make dev-api` | `.\scripts\build.ps1 dev-api -Config x.yaml` |
+macOS / Linux 用 `make`，Windows 用 `scripts\build.ps1`（Windows 默认没有 make）。两边的目标一一对应，参数写法不同：`make … APP=music` ⇄ `-App music`，`BASE_PATH=/bailing make …` ⇄ `-BasePath /bailing`，`CONFIG=x.yaml` ⇄ `-Config x.yaml`。
+
+| make（macOS / Linux） | PowerShell（Windows） | 作用 |
+|---|---|---|
+| `make deps` | `.\scripts\build.ps1 deps` | `go mod tidy` + `npm install` |
+| `make dev-api` | `.\scripts\build.ps1 dev-api` | 开发：Go 后端 :8080 |
+| `make dev-web` | `.\scripts\build.ps1 dev-web` | 开发：Vite 前端 :5173 |
+| `make web` | `.\scripts\build.ps1 web` | 只构建前端到 `internal/webui/dist/` |
+| `make build` | `.\scripts\build.ps1 windows` | 本机版本（服务器程序） |
+| `make build-linux` | `.\scripts\build.ps1 linux` | Linux x86_64 服务器程序 → `dist/bailing-linux-amd64` |
+| `make build-linux-arm64` | `.\scripts\build.ps1 linux-arm64` | ARM 服务器程序 |
+| `make build-windows` | `.\scripts\build.ps1 windows` | Windows 服务器程序（**不是桌面端**，要用浏览器访问） |
+| `make build-mac` | `.\scripts\build.ps1 mac` | macOS 服务器程序（arm64 + amd64） |
+| `make desktop-deps` | `.\scripts\build.ps1 desktop-deps` | 桌面端：给 `desktop/go.mod` 加 Wails 依赖（一次） |
+| `make desktop APP=music` | `.\scripts\build.ps1 desktop -App music` | 桌面端，**本机系统**的版本（Mac 上是 `.app`，Windows 上是 `.exe`） |
+| `make desktop-windows APP=music` | —（Windows 上直接用 `desktop`） | 桌面端：在 Mac 上交叉编译 Windows 版 `.exe` |
+| `make desktop-dev APP=music` | `.\scripts\build.ps1 desktop-dev -App music` | 桌面端调试（热重载） |
+| `make test` | `.\scripts\build.ps1 test` | `go test` + `svelte-check` |
+| `make lint` | `.\scripts\build.ps1 lint` | `go vet` + `svelte-check` |
+| `make fmt` | `.\scripts\build.ps1 fmt` | `gofmt` |
+| `make clean` | `.\scripts\build.ps1 clean` | 删除 `dist/` 和前端构建结果 |
+
+> 2026-10-27：修复了 `build.ps1` 里 `-App` 参数没有声明、`desktop` / `desktop-deps` 不在允许的目标列表里的问题（之前在 Windows 上执行 `desktop -App music` 会直接报错）；新增 `desktop-dev`；`-App` 现在对 `web`、`windows`、`linux` 等所有构建目标都生效。
 
 ## 7. 常见开发问题
 
-| 现象 | 处理 |
+| 现象 | 原因与处理 |
 |---|---|
-| `go: missing go.sum entry` | 没有执行 `go mod tidy` |
-| `go build ./...` 报 `web/node_modules` 里的错误 | 不会发生：`web/go.mod` 把 web 目录隔离成了独立模块。如果看到，确认 `web/go.mod` 还在 |
-| 5173 打开后接口全是 502 / 连接被拒绝 | 后端没启动，或者不在 8080 端口；`BAILING_API=http://127.0.0.1:9090 npm run dev` 可改代理目标 |
-| 登录返回 403（`bad_origin`） | 请求来源与访问地址不是同一主机，且不在 `allowed_origins` 里；把来源地址加进去 |
-| 登录成功但刷新后又要登录 | 开发环境的 `base_url` 写成了 https，Cookie 带了 Secure 标志，http 下不会保存 |
-| 缩略图一直「冲洗中」 | vips 没找到：看后端启动日志 `libvips not found`；Windows 检查 `vips_bin_dir` |
-| 端口被占用 | macOS `lsof -i :8080`；Windows `netstat -ano \| findstr :8080`，再结束对应进程 |
-| Windows 上中文路径的相册扫不到 | 确认配置文件以 UTF-8 保存；路径用正斜杠 |
-| 改了 `zh.ts` 后英文界面显示键名 | `en.ts` 缺了对应的键 |
-
-
-
-
+| 访问 8080 显示「bailing API is running … front end has not been built」 | 直接 `go build` / `go run` 前没有构建前端。开发时访问 5173（Vite）；发布时用 `make build*` / `build.ps1`，它们会先构建前端 |
+| 5173 页面能打开，接口全部 404 或连接被拒绝 | 后端没启动，或不在 8080。先 `make dev-api`；后端换了地址时，启动 Vite 前设置环境变量 `BAILING_API=http://127.0.0.1:端口`（见 `web/vite.config.ts`） |
+| 登录返回 403 | 来源校验没通过：用手机或局域网 IP 访问时，把 `http://IP:5173` 加到 `config.dev.yaml` 的 `allowed_origins`，重启后端 |
+| 登录后马上又要求登录 | `base_url` 写成了 https 但实际用 http 访问（Cookie 带 Secure）；开发配置保持 `http://localhost:5173` |
+| `go: module lookup disabled` / 下载依赖很慢 | 设置 Go 代理：`go env -w GOPROXY=https://goproxy.cn,direct`（1.3） |
+| `npm install` 很慢或失败 | `npm config set registry https://registry.npmmirror.com` |
+| 缩略图一直不出现、HEIC 裂图 | 没装 libvips 或不支持 heif：`vips --version`、`vips -l \| grep -i heif`；Windows 上检查 `imaging.vips_bin_dir` 是否用正斜杠 |
+| 改了 Go 代码没有生效 | Go 不会热重载，`Ctrl+C` 后重新 `make dev-api`（或用 air，见 3.1） |
+| 改了配置没有生效 | 配置只在启动时读取，重启后端 |
+| `database is locked` | 用 DB Browser 等工具打开数据库时写入了数据；查看前先停后端，或只读打开 |
+| 想从零开始 | 删掉 `data/runtime/`（数据库和缓存），重新 `user add` |
+| Windows：`build.ps1` 提示无法加载脚本 | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| Windows：`curl` 参数不对 | PowerShell 里 `curl` 是别名，用 `curl.exe`，JSON 里的引号写成 `\"` |
+| `wails: command not found`（`go install` 已经成功） | `go install` 把程序放在 `$(go env GOPATH)/bin`（一般是 `~/go/bin`），这个目录不在 PATH 里。`make desktop*` 已经会自动去 `~/go/bin` 找；要在终端直接用 `wails`，macOS（bash）执行 `echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bash_profile && source ~/.bash_profile`（zsh 写进 `~/.zshrc`）；Windows 把 `%USERPROFILE%\go\bin` 加入 PATH 后重开 PowerShell。`make desktop-doctor` 不依赖 PATH |
+| 桌面端编译报找不到 `github.com/wailsapp/wails/v2` | 没执行过 `make desktop-deps`（`.\scripts\build.ps1 desktop-deps`） |
+| 桌面端换了版本（APP）后 Windows 图标没变 | `desktop/build/windows/icon.ico` 是第一次生成后缓存的；删掉 `desktop/build/windows/` 再构建（`make desktop-windows` 和 Windows 上的 `build.ps1 desktop` 都会自动删） |
+| 桌面端打开是空白或提示端口被占用 | 同一版本已经开着一个窗口（固定端口 47821 / 47822 / 47823），先关掉；日志在启动它的终端里 |
+````

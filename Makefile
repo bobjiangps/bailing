@@ -8,8 +8,10 @@ DIST    := dist
 CONFIG  ?= config.dev.yaml
 # edition: all | photos | music (front end, PWA manifest and desktop app)
 APP     ?= all
+# Wails CLI: from PATH, else where `go install` puts it ($GOPATH/bin, usually ~/go/bin)
+WAILS   ?= $(shell command -v wails 2>/dev/null || echo "$$(go env GOPATH)/bin/wails")
 
-.PHONY: help deps dev-api dev-web web build build-linux build-linux-arm64 build-windows build-mac test lint fmt clean desktop-deps desktop desktop-dev
+.PHONY: help deps dev-api dev-web web build build-linux build-linux-arm64 build-windows build-mac test lint fmt clean desktop-deps desktop-doctor desktop desktop-windows desktop-dev
 
 help:
 	@echo "make deps              go mod tidy + npm install"
@@ -21,6 +23,7 @@ help:
 	@echo "make build-linux-arm64 ARM ECS -> dist/bailing-linux-arm64"
 	@echo "make build-windows     -> dist/bailing-windows-amd64.exe"
 	@echo "make desktop           desktop app (Wails) -> desktop/build/bin"
+	@echo "make desktop-windows   Windows desktop app built on this Mac -> desktop/build/bin/*.exe"
 	@echo "  APP=photos|music      build only the albums or only the music edition"
 	@echo "                        (web, build*, desktop; e.g. make web APP=music)"
 	@echo "make test / lint / fmt / clean"
@@ -74,9 +77,22 @@ clean:
 desktop-deps:
 	cd desktop && go get github.com/wailsapp/wails/v2@latest && go mod tidy
 
+# runs `wails doctor` even when ~/go/bin is not on PATH
+desktop-doctor:
+	"$(WAILS)" doctor
+
 desktop: web
 	cp desktop/build/appicon-$(APP).png desktop/build/appicon.png
-	cd desktop && wails build -clean -ldflags "-X main.edition=$(APP) -X main.version=$(VERSION)" -o bailing-$(APP)
+	cd desktop && "$(WAILS)" build -clean -ldflags "-X main.edition=$(APP) -X main.version=$(VERSION)" -o bailing-$(APP)
+
+# Windows desktop app built on macOS / Linux (cross compile; the Windows
+# target needs no cgo). build/windows is removed first so Wails regenerates
+# icon.ico from this edition's appicon.png.
+# -> desktop/build/bin/bailing-$(APP).exe  (needs WebView2 on the PC; Win10/11 have it)
+desktop-windows: web
+	cp desktop/build/appicon-$(APP).png desktop/build/appicon.png
+	rm -rf desktop/build/windows
+	cd desktop && "$(WAILS)" build -clean -platform windows/amd64 -ldflags "-X main.edition=$(APP) -X main.version=$(VERSION)" -o bailing-$(APP).exe
 
 desktop-dev: web
-	cd desktop && wails dev -ldflags "-X main.edition=$(APP)"
+	cd desktop && "$(WAILS)" dev -ldflags "-X main.edition=$(APP)"

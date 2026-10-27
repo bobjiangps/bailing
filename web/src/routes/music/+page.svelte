@@ -62,6 +62,7 @@
 	let desc = $state(readSort().desc);
 	let listEl: HTMLOListElement | undefined = $state();
 	let libEl: HTMLElement | undefined = $state();
+	let headEl: HTMLElement | undefined = $state();
 
 	function readSort(): { sort: Sort; desc: boolean } {
 		try {
@@ -74,6 +75,10 @@
 	}
 
 	function setSort(s: Sort, d: boolean) {
+		if (s === sort && d === desc) return;
+		// a new order: show its beginning, not the playing song
+		pendingLocate = false;
+		restoreTo = 'top';
 		sort = s;
 		desc = d;
 		try {
@@ -84,22 +89,28 @@
 	}
 
 	/*
-	 * Keep the playing song in sight: when it changes (next / previous /
-	 * shuffle) and when the list is shown again (drawer opens, list reloads),
-	 * scroll its row into view. Nothing moves when the row is already
-	 * visible, so tapping a row does not make the list jump.
+	 * Keep the playing song in sight, but only because the SONG changed
+	 * (next / previous / shuffle / auto-advance). Anything the user does
+	 * (sorting, switching tabs or folders, scrolling) keeps the position the
+	 * user chose, so the list never jumps away from what they are looking
+	 * at. A song change that could not be shown right then (drawer hidden,
+	 * list not loaded yet) is shown when the drawer opens / the list first
+	 * appears. Nothing moves when the row is already visible.
 	 */
-	function locate(force = false, behavior: ScrollBehavior = 'smooth') {
+	function locate(force = false, behavior: ScrollBehavior = 'smooth'): boolean {
 		const el = listEl?.querySelector<HTMLElement>('li.cur');
-		if (!el) return;
+		if (!el) return false;
 		if (!force) {
 			const r = el.getBoundingClientRect();
 			const box = wide && libEl ? libEl.getBoundingClientRect() : { top: 0, bottom: innerHeight };
-			// the fixed player bar covers the bottom of the window
+			// the sticky tab bar covers the top of the list, the fixed
+			// player bar the bottom of the window
+			const top = Math.max(box.top, headEl?.getBoundingClientRect().bottom ?? 0);
 			const bottom = wide ? box.bottom : box.bottom - 96;
-			if (r.top >= box.top && r.bottom <= bottom) return;
+			if (r.top >= top && r.bottom <= bottom) return true;
 		}
 		el.scrollIntoView({ block: 'center', behavior });
+		return true;
 	}
 
 	/** On narrow screens the list is part of the page: only follow the song
@@ -111,25 +122,100 @@
 		return !!r && r.top < innerHeight * 0.6 && r.bottom > 0;
 	}
 
+	/** playing, or loading the next song: what auto mode looks at */
+	const busy = $derived(player.playing || player.loading);
+
+	/** Auto mode is about to slide the drawer away: scrolling it now would
+	 * show a jump that vanishes half a second later (looks like a glitch).
+	 * It is positioned instantly the next time it opens instead. */
+	const drawerLeaving = () => wide && libAuto && !libByUser && busy;
+
 	const curLocal = $derived(player.current?.source === 'local' ? player.current.id : null);
+
+	/** the current song still has to be shown (set by a song change and on
+	 * entering the page; cleared once shown or by any user navigation) */
+	let pendingLocate = true;
 
 	// the song changed
 	$effect(() => {
 		if (!curLocal) return;
-		const h = setTimeout(() => untrack(() => q === '' && listInView() && locate()), 80);
+		pendingLocate = true;
+		const h = setTimeout(
+			() => untrack(() => q === '' && listInView() && !drawerLeaving() && locate() && (pendingLocate = false)),
+			80
+		);
 		return () => clearTimeout(h);
 	});
 
-	// the list (re)appeared: drawer opened, tab / sort changed, list reloaded
+	// the drawer opened: show a song change that happened while it was away
+	// (instant, before it has slid in, so it already opens there)
+	$effect(() => {
+		if (!wide || !libOpen) return;
+		let alive = true;
+		untrack(() =>
+			tick().then(() =>
+				requestAnimationFrame(() => alive && pendingLocate && q === '' && locate(false, 'instant') && (pendingLocate = false))
+			)
+		);
+		return () => (alive = false);
+	});
+
+	// ---- scroll position per view (tab + folder / artist / album) ----
+	const scrollMemo = new Map<string, number>();
+	/** where to put the list once the view that is loading is shown */
+	let restoreTo: number | 'top' | null = null;
+	const viewKey = () => `${tab}|${group ?? ''}`;
+	const getScroll = () => (wide ? (libEl?.scrollTop ?? 0) : scrollY);
+
+	function applyScroll(to: number | 'top') {
+		if (to !== 'top') {
+			if (wide) libEl?.scrollTo({ top: to, behavior: 'instant' });
+			else scrollTo({ top: to, behavior: 'instant' });
+		} else if (wide) {
+			libEl?.scrollTo({ top: 0, behavior: 'instant' });
+		} else if (libEl && libEl.getBoundingClientRect().top < 0) {
+			// narrow: bring the list's top back, never scroll the page up
+			// to the turntable
+			libEl.scrollIntoView({ block: 'start', behavior: 'instant' });
+		}
+	}
+
+	/** remember where the user is, then switch the view (user action) */
+	function leaveView(): void {
+		scrollMemo.set(viewKey(), getScroll());
+		pendingLocate = false;
+	}
+	function enterView(): void {
+		restoreTo = scrollMemo.get(viewKey()) ?? 'top';
+		// library views apply it when their list has loaded; the others
+		// (mine / radio / online) render at once
+		if (!isLib) tick().then(() => requestAnimationFrame(() => restoreTo !== null && (applyScroll(restoreTo), (restoreTo = null))));
+	}
+
+	function setGroup(g: string | null) {
+		leaveView();
+		group = g;
+		enterView();
+	}
+
+	// a list finished loading (tab / folder / sort / search / rescan)
 	$effect(() => {
 		void tracks;
-		const open = wide ? libOpen : true;
-		if (!open) return;
+		void groups;
 		let alive = true;
-		tick().then(() => {
-			// wait for the drawer to start sliding in
-			setTimeout(() => alive && untrack(() => q === '' && !scanning && listInView() && locate(false, 'instant')), 60);
-		});
+		untrack(() =>
+			tick().then(() =>
+				requestAnimationFrame(() => {
+					if (!alive) return;
+					if (restoreTo !== null) {
+						applyScroll(restoreTo);
+						restoreTo = null;
+					} else if (pendingLocate && q === '' && !scanning && listInView() && locate(false, 'instant')) {
+						pendingLocate = false; // first time the list appears on this page
+					}
+				})
+			)
+		);
 		return () => (alive = false);
 	});
 
@@ -147,6 +233,7 @@
 
 	function setLibOpen(v: boolean) {
 		libOpen = v;
+		libByUser = v;
 		try {
 			localStorage.setItem('bl.libOpen', v ? '1' : '0');
 		} catch {
@@ -156,12 +243,16 @@
 
 	/*
 	 * Auto mode (default on): the drawer covers the lyrics, so it slides away
-	 * when playback starts and comes back on pause. Only the play/pause
+	 * when playback starts and comes back on a real pause. Only that
 	 * transition moves it; in between the user can open / close it freely.
-	 * Short delays: a double-click in the list is still seen, and the gap
-	 * between two songs (playing briefly false) does not flash the drawer.
+	 * "Busy" includes loading: switching songs (next / previous / shuffle,
+	 * a slow online link) is not a pause and must not bring the drawer up.
+	 * Short delays: a double-click in the list is still seen, and the
+	 * moment between "ended" and the next song loading does not flash it.
 	 */
 	let libAuto = $state(readLibAuto());
+	/** opened by hand (L / button) rather than by auto mode */
+	let libByUser = $state(false);
 
 	function readLibAuto(): boolean {
 		try {
@@ -182,14 +273,18 @@
 
 	$effect(() => {
 		if (!wide || !libAuto) return;
-		const playing = player.playing;
-		const h = setTimeout(() => (libOpen = !playing), playing ? 700 : 900);
+		const b = busy; // a $derived: re-runs only when it really flips
+		const h = setTimeout(() => {
+			libOpen = !b;
+			libByUser = false;
+		}, b ? 700 : 900);
 		return () => clearTimeout(h);
 	});
 
 	function onKey(e: KeyboardEvent) {
 		const el = e.target as HTMLElement;
 		if (!wide || e.ctrlKey || e.metaKey || e.altKey) return;
+		if (document.querySelector('dialog[open]')) return;
 		if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.tagName === 'SELECT' || el?.isContentEditable) return;
 		if (e.key === 'l' || e.key === 'L') setLibOpen(!libOpen);
 		else if (e.key === 'Escape' && libOpen && !document.querySelector('.fx-panel, .menu')) setLibOpen(false);
@@ -260,8 +355,19 @@
 	});
 
 	function pickTab(tb: Tab) {
+		// the tab bar stays on top while scrolling: tapping the current tab
+		// again goes back to the top of the list
+		if (tb === tab && group === null) {
+			pendingLocate = false;
+			if (wide) libEl?.scrollTo({ top: 0, behavior: 'smooth' });
+			else if (libEl && libEl.getBoundingClientRect().top < 0) libEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+			return;
+		}
+		// switching away and back returns to where the user was
+		leaveView();
 		tab = tb;
 		group = null;
+		enterView();
 		try {
 			sessionStorage.setItem('bl.musicTab', tb);
 		} catch {
@@ -356,7 +462,7 @@
 				</button>
 			</div>
 		{/if}
-		<div class="lib-head">
+		<div class="lib-head" bind:this={headEl}>
 			<div class="tabs">
 				{#each TABS as tb (tb)}
 					<button class:on={tab === tb} class:ext={tb === 'radio' || tb === 'online' || tb === 'mine'} onclick={() => pickTab(tb)}>
@@ -382,7 +488,7 @@
 		{:else}
 		{#if group !== null}
 			<div class="crumb">
-				<button class="icon-btn" aria-label={t('music.back')} onclick={() => (group = null)}>
+				<button class="icon-btn" aria-label={t('music.back')} onclick={() => setGroup(null)}>
 					<Icon name="back" size={18} />
 				</button>
 				<span class="art">{nameOf(group, tab)}</span>
@@ -397,7 +503,7 @@
 			<ul class="groups">
 				{#each groups as g (g.name)}
 					<li>
-						<button onclick={() => (group = g.name)}>
+						<button onclick={() => setGroup(g.name)}>
 							{#if g.cover}
 								<img src={coverUrl(g.cover)} alt="" loading="lazy" />
 							{:else}
@@ -679,17 +785,33 @@
 
 	/* ---- library ---- */
 	.library {
+		--pad-x: 14px;
 		border-radius: var(--radius-l);
-		padding: 18px 14px 14px;
+		padding: 18px var(--pad-x) 14px;
 		min-height: 60dvh;
+		/* "back to top" on narrow screens stops below the fixed top bar */
+		scroll-margin-top: calc(var(--topbar-h) + 8px);
 	}
+	/* tabs + search stay visible while the list scrolls: inside the drawer
+	   (its own scroller) at the top edge, on narrow screens under the top bar */
 	.lib-head {
+		position: sticky;
+		top: 0;
+		z-index: 3;
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
-		padding: 0 6px 12px;
+		margin: 0 calc(-1 * var(--pad-x)) 4px;
+		padding: 10px calc(var(--pad-x) + 6px);
+		background: color-mix(in srgb, var(--surface) 90%, transparent);
+		backdrop-filter: blur(14px);
+		-webkit-backdrop-filter: blur(14px);
+		border-bottom: 1px solid transparent;
+	}
+	.music:not(.wide) .lib-head {
+		top: var(--topbar-h);
 	}
 	.tabs {
 		display: flex;
@@ -725,10 +847,11 @@
 	}
 	@media (max-width: 640px) {
 		.library {
-			padding: 14px 8px 10px;
+			--pad-x: 8px;
+			padding: 14px var(--pad-x) 10px;
 		}
 		.lib-head {
-			padding: 0 2px 10px;
+			padding: 8px calc(var(--pad-x) + 2px);
 		}
 		.tabs button {
 			padding: 4px 10px;
